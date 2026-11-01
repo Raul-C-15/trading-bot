@@ -140,7 +140,7 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
         return False
 
 
-def send_trade_alert(signal, with_buttons: bool = True) -> bool:
+def send_trade_alert(signal, with_buttons: bool = True, is_power_hour: bool = False) -> bool:
     """Trimite o alerta detaliata cu butoane interactive [CUMPARA] si [IGNORA]."""
     if getattr(signal, "setup_type", "") == "VOLUME_BREAKOUT":
         header = "🚀 *SEMNAL NOU: BREAKOUT DE VOLUM*"
@@ -148,6 +148,9 @@ def send_trade_alert(signal, with_buttons: bool = True) -> bool:
         header = "🎯 *SEMNAL NOU: PULLBACK EMA 20*"
     else:
         header = "🎯 *SEMNAL NOU DE CUMPARARE*"
+
+    if is_power_hour:
+        header += "\n🔥 *[POWER HOUR 22:00-23:00 — CONFIRMAT APROAPE DE CLOSE]*"
 
     qty_val = float(signal.shares)
     qty_str = f"{int(qty_val)}" if qty_val.is_integer() else f"{qty_val:.4f}".rstrip("0").rstrip(".")

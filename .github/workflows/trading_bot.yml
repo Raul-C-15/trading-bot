@@ -1,10 +1,12 @@
-name: 🤖 Swing Trading Bot (Luni-Vineri + Weekend)
+name: 🤖 Swing Trading Bot (Full-Session Cloud + Weekend)
 
 on:
   schedule:
-    # 1. Luni - Vineri: la fiecare 30 minute in timpul orelor bursei SUA (13:30 - 21:30 UTC / 16:30 - 23:00 RO)
-    # Botul verifica suplimentar ceasul oficial Alpaca (clock.is_open) pentru sarbatori legale si DST
-    - cron: '*/30 13-21 * * 1-5'
+    # 1. Luni - Vineri (Arhitectura Full-Session):
+    # Porneste la 16:10 RO (Pre-Market Briefing) si ruleaza in 2 sesiuni continue de ~3.5 ore
+    # pana la inchiderea bursei (23:05 RO -> Raport End-of-Day).
+    # Cu 'concurrency' activ, daca o sesiune ruleaza deja, nu este intrerupta, iar urmatoarea preia stafeta fara goluri!
+    - cron: '10,40 13-21 * * 1-5'
 
     # 2. Weekend (Duminica la 16:00 UTC / 18:00-19:00 RO):
     # Reantreneaza modelul ML XGBoost, actualizeaza Watchlist-ul de lideri si trimite Raportul pe Telegram
@@ -16,11 +18,13 @@ on:
       mode:
         description: 'Mod de rulare'
         required: true
-        default: 'scan_once'
+        default: 'full_session'
         type: choice
         options:
-          - scan_once
+          - full_session
           - scan_force
+          - premarket_briefing
+          - eod_report
           - weekend_maintenance
 
 permissions:
@@ -33,7 +37,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 240
 
     steps:
       - name: 📥 Descarcare cod si stare curenta (Checkout)
@@ -50,7 +54,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🚀 Executie Trading Bot
+      - name: 🚀 Executie Trading Bot (Full-Session / Comenzi Live Telegram)
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -62,15 +66,22 @@ jobs:
           if [ "${{ github.event.schedule }}" = "0 16 * * 0" ] || [ "${{ github.event.inputs.mode }}" = "weekend_maintenance" ]; then
             echo "🛠️ Rulare Mentenanta de Weekend & Pregatire Saptamana Noua..."
             python scheduler.py --weekend
+          elif [ "${{ github.event.inputs.mode }}" = "premarket_briefing" ]; then
+            echo "🌅 Trimitere Briefing Pre-Market..."
+            python scheduler.py --premarket
+          elif [ "${{ github.event.inputs.mode }}" = "eod_report" ]; then
+            echo "🔔 Trimitere Raport Inchidere Bursa (End-of-Day)..."
+            python scheduler.py --eod
           elif [ "${{ github.event.inputs.mode }}" = "scan_force" ]; then
-            echo "🔎 Rulare Scanare Fortata (chiar daca bursa este inchisa)..."
-            python scheduler.py --once --force
+            echo "🔎 Rulare Scanare Fortata + 90s Ascultare Telegram..."
+            python scheduler.py --session --force
           else
-            echo "📈 Rulare Scanare Automata (Orele Bursei SUA)..."
-            python scheduler.py --once
+            echo "📈 Rulare Sesiune Continua (~3.5h, scan la 15m, SL/TP la 60s, Telegram Live)..."
+            python scheduler.py --session --max-minutes 215
           fi
 
       - name: 💾 Salvare stare persistenta (Jurnal, Pozitii, ML, Watchlist)
+        if: always()
         run: |
           git config user.name "Trading Bot Cloud"
           git config user.email "bot@users.noreply.github.com"

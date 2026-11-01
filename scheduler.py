@@ -1,18 +1,23 @@
 """
-Scheduler Autonom pentru Trading Bot.
-Monitorizeaza bursa SUA si ruleaza automat in timpul orelor de tranzactionare.
-Trimite alerte Telegram si (optional) executa ordinele automat pe Alpaca.
+Scheduler Autonom pentru Trading Bot (Full-Session Cloud & Local Edition).
+Monitorizeaza bursa SUA si ruleaza automat in timpul orelor de tranzactionare:
+- Scanare la fiecare 15 minute + Indicator Power Hour (22:00 - 23:00 RO)
+- Verificare SL / TP1 / TP2 / Breakeven / Trailing Stop la fiecare 60 secunde
+- Comenzi interactive pe Telegram (/status, /positions, /scan, /watchlist)
+- Briefing Pre-Market (16:15 RO) & Raport de Inchidere Bursa (23:05 RO)
 """
 
 import warnings
 warnings.filterwarnings("ignore")
 
+import os
+import subprocess
 import time
 import sys
 import argparse
 from datetime import datetime
 import config
-from data_loader import fetch_market_regime, fetch_stock_data
+from data_loader import fetch_market_regime, fetch_stock_data, get_next_earnings_date
 from strategy import analyze_ticker
 from bot_trader import AlpacaTrader
 from notifier import (
@@ -21,17 +26,55 @@ from notifier import (
     load_telegram_state,
     save_telegram_state,
 )
-from telegram_listener import TelegramListener
+from telegram_listener import TelegramListener, QUICK_MENU_MARKUP
 
-# Deduplicare zilnica a alertelor (ticker -> "YYYY-MM-DD") pentru a evita spam-ul la fiecare 30 min
+# Deduplicare zilnica a alertelor (ticker -> "YYYY-MM-DD")
 ALERTED_TODAY = load_telegram_state().get("alerted_today", {})
+
+
+def sync_state_to_git():
+    """
+    Salveaza si urca pe GitHub in timp real fisierele din data/ cand ruleaza in GitHub Actions.
+    Astfel, niciun ordin sau mutare de Stop-Loss nu se pierde intre sesiuni.
+    """
+    if not os.getenv("GITHUB_ACTIONS"):
+        return
+    try:
+        subprocess.run(["git", "config", "user.name", "Trading Bot Cloud"], check=False)
+        subprocess.run(["git", "config", "user.email", "bot@users.noreply.github.com"], check=False)
+        subprocess.run(["git", "add", "data/*.json"], check=False)
+        diff = subprocess.run(["git", "diff", "--staged", "--quiet"], check=False)
+        if diff.returncode != 0:
+            now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            subprocess.run(["git", "commit", "-m", f"🤖 Live sync state ({now_utc}) [skip ci]"], check=False)
+            subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
+            subprocess.run(["git", "push"], check=False)
+    except Exception:
+        pass
+
+
+def is_us_power_hour(trader: AlpacaTrader) -> bool:
+    """
+    Returneaza True daca ne aflam in ultima ora a bursei SUA (15:00 - 16:00 ET / 22:00 - 23:00 RO),
+    cand lumanarea zilnica 1D si volumul sunt aproape finalizate.
+    """
+    if trader.is_connected and trader.client:
+        try:
+            clock = trader.client.get_clock()
+            if clock.is_open and clock.timestamp.hour == 15:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def run_automated_scan(trader: AlpacaTrader):
     """Executa o sesiune de scanare autonoma."""
     now_str = datetime.now().strftime("%H:%M:%S")
     today_str = datetime.now().strftime("%Y-%m-%d")
-    print(f"\n[{now_str}] 🔎 Rulare scanare automata...")
+    power_hour = is_us_power_hour(trader)
+    ph_tag = " 🔥 [POWER HOUR 15:00-16:00 ET]" if power_hour else ""
+    print(f"\n[{now_str}] 🔎 Rulare scanare automata...{ph_tag}")
 
     # 0. Verificare automata Model ML (< 7 zile) & Watchlist Dinamic Zilnic
     try:
@@ -69,14 +112,14 @@ def run_automated_scan(trader: AlpacaTrader):
         market = fetch_market_regime(config.BENCHMARK_TICKER)
         if not market["is_bullish"]:
             print(f"[{now_str}] ⚠️ Piata este BEARISH (SPY=${market['price']} sub SMA 200=${market['sma_200']}). Nu se deschid pozitii.")
-            return
+            return 0
         regime = market.get("regime", "POWER_TREND")
         risk_mult = market.get("risk_multiplier", 1.0)
         max_pos_allowed = market.get("max_positions_allowed", config.MAX_OPEN_POSITIONS)
         print(f"[{now_str}] 📊 Regim Piata: {regime} | VIX: {market.get('vix', 18.0)} | Multiplicator Risc: {risk_mult*100:.0f}%")
     except Exception as e:
         print(f"[{now_str}] Eroare Regim Piata: {e}")
-        return
+        return 0
 
     # 2. Scanare actiuni
     summary = trader.get_portfolio_summary()
@@ -124,7 +167,7 @@ def run_automated_scan(trader: AlpacaTrader):
 
             # Deduplicare alerta: trimitem cel mult o alerta pe zi pentru acelasi simbol
             if ALERTED_TODAY.get(ticker) != today_str:
-                send_trade_alert(signal)
+                send_trade_alert(signal, is_power_hour=power_hour)
                 ALERTED_TODAY[ticker] = today_str
                 save_telegram_state(alerted_today=ALERTED_TODAY)
             else:
@@ -150,10 +193,121 @@ def run_automated_scan(trader: AlpacaTrader):
                     tp2_price=signal.tp2,
                     setup_type=signal.setup_type
                 )
+        sync_state_to_git()
         return len(buy_signals)
     else:
         print(f"[{now_str}] ℹ️ Niciun semnal nou in aceasta runda.")
+        sync_state_to_git()
         return 0
+
+
+def run_premarket_briefing(trader: AlpacaTrader):
+    """
+    Briefing Pre-Market (16:15 RO / 9:15 ET):
+    Pregateste Watchlist-ul zilei, verifica modelul ML, verifica apropierea de Earnings
+    pentru pozitiile active si trimite planul zilei pe Telegram.
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if ALERTED_TODAY.get("_PREMARKET_SENT_") == today_str:
+        return
+
+    print("\n🌅 Pregătire Briefing Pre-Market...")
+    try:
+        from ml_predictor import ensure_ml_ready
+        ensure_ml_ready(max_age_days=7)
+    except Exception:
+        pass
+
+    wl_preview = "N/A"
+    try:
+        from data_loader import get_smart_hybrid_watchlist
+        wl, _ = get_smart_hybrid_watchlist(force_refresh=True)
+        wl_preview = ", ".join(wl[:12])
+    except Exception:
+        pass
+
+    regime_str = "N/A"
+    try:
+        m = fetch_market_regime(config.BENCHMARK_TICKER)
+        regime_str = (
+            f"`{m.get('regime', 'N/A')}` (SPY `${m.get('price', 0):.2f}` | "
+            f"VIX `{m.get('vix', 0):.1f}` | Risc `{m.get('risk_multiplier', 1)*100:.0f}%`)"
+        )
+    except Exception:
+        pass
+
+    summary = trader.get_portfolio_summary()
+    open_pos = trader.get_open_positions()
+    earnings_warnings = []
+    for p in open_pos:
+        sym = p["symbol"]
+        ed = get_next_earnings_date(sym)
+        if ed is not None:
+            days_e = (ed.date() - datetime.now().date()).days
+            if 0 <= days_e <= 5:
+                earnings_warnings.append(f"⚠️ `{sym}` raportează Earnings în `{days_e}` zile!")
+
+    earn_block = ("\n" + "\n".join(earnings_warnings) + "\n") if earnings_warnings else ""
+
+    send_telegram_message(
+        f"🌅 *BRIEFING PRE-MARKET — DESCHIDEREA BURSEI SUA*\n\n"
+        f"💰 *Portofoliu:* `${summary['portfolio_value']:,.2f}` (Cash: `${summary['cash']:,.2f}`)\n"
+        f"📂 *Poziții Deschise:* `{len(open_pos)}` active\n"
+        f"📊 *Regim Piață:* {regime_str}\n"
+        f"{earn_block}"
+        f"🌟 *Top Lideri Monitorizați Azi:* `{wl_preview}...`\n\n"
+        f"⏱️ _Scanarea începe după Buffer-ul de Deschidere (16:45 RO), la fiecare {config.SCAN_INTERVAL_MINUTES} minute!_",
+        reply_markup=QUICK_MENU_MARKUP,
+    )
+    ALERTED_TODAY["_PREMARKET_SENT_"] = today_str
+    save_telegram_state(alerted_today=ALERTED_TODAY)
+    sync_state_to_git()
+
+
+def run_eod_report(trader: AlpacaTrader):
+    """
+    Raport de Inchidere Bursa (End-of-Day, ~23:05 RO / 16:05 ET):
+    Sincronizeaza tranzactiile inchise, afiseaza P&L-ul zilei si starea pozitiilor peste noapte.
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if ALERTED_TODAY.get("_EOD_SENT_") == today_str:
+        return
+
+    print("\n🔔 Generare Raport Închidere Bursă (End-of-Day)...")
+    try:
+        from risk_learner import sync_closed_trades_from_alpaca
+        sync_closed_trades_from_alpaca(trader)
+    except Exception:
+        pass
+
+    summary = trader.get_portfolio_summary()
+    open_pos = trader.get_open_positions()
+    active_risk = trader.get_active_risk_positions_count()
+
+    pos_lines = []
+    total_unrealized = 0.0
+    for p in open_pos:
+        pl = p["unrealized_pl"]
+        pl_pct = p["unrealized_plpc"]
+        total_unrealized += pl
+        icon = "🟢" if pl >= 0 else "🔴"
+        pos_lines.append(f"  {icon} `{p['symbol']}`: `${pl:+,.2f}` (`{pl_pct:+.2f}%`)")
+
+    pos_summary = "\n".join(pos_lines) if pos_lines else "  • _Nicio poziție deschisă peste noapte (100% Cash)_"
+
+    send_telegram_message(
+        f"🔔 *RAPORT ÎNCHIDERE BURSĂ SUA (END-OF-DAY)*\n\n"
+        f"💰 *Valoare Portofoliu:* `${summary['portfolio_value']:,.2f}`\n"
+        f"💵 *Cash Disponibil:* `${summary['cash']:,.2f}`\n"
+        f"📈 *P&L Nerealizat Poziții:* `${total_unrealized:+,.2f}`\n"
+        f"🛡️ *Poziții Peste Noapte ({len(open_pos)} | Risc Activ: {active_risk}/{config.MAX_OPEN_POSITIONS}):*\n"
+        f"{pos_summary}\n\n"
+        f"🌙 _Bursa s-a închis. Ne revedem mâine la 16:15 pentru Briefing-ul Pre-Market!_",
+        reply_markup=QUICK_MENU_MARKUP,
+    )
+    ALERTED_TODAY["_EOD_SENT_"] = today_str
+    save_telegram_state(alerted_today=ALERTED_TODAY)
+    sync_state_to_git()
 
 
 def run_weekend_maintenance(trader: AlpacaTrader):
@@ -215,86 +369,133 @@ def run_weekend_maintenance(trader: AlpacaTrader):
         f"📊 *Regim Piață:* {regime_str}\n"
         f"🧠 *Model ML Reantrenat:* {ml_info}\n"
         f"🌟 *Top Lideri Săptămâna Viitoare:* `{wl_preview}`\n\n"
-        f"✅ _Botul este optimizat și pregătit pentru deschiderea de Luni, 16:30!_"
+        f"✅ _Botul este optimizat și pregătit pentru deschiderea de Luni, 16:15!_",
+        reply_markup=QUICK_MENU_MARKUP,
     )
+    sync_state_to_git()
     print("✅ Mentenanța de weekend s-a încheiat cu succes!")
 
 
-def run_once_cloud(trader: AlpacaTrader, force: bool = False, active_minutes: int = 25):
+def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: int = 215):
     """
-    Executa o sesiune Cloud de 25 de minute (ideal pentru GitHub Actions la fiecare 30 min Luni-Vineri):
-    - Nu doarme intre scanari: tine ascultatorul de butoane Telegram pornit LIVE si
-      verifica la fiecare 2 minute Stop-Loss / TP1 / TP2 / Breakeven / Trailing Stop!
+    Arhitectura Full-Session (fara intreruperi timp de ~3.5 ore per sesiune):
+    - Sesiunea 1 (16:15 - 19:45 RO): Pre-Market Briefing -> Scanare la 15 min + SL/TP la 60s
+    - Sesiunea 2 (19:45 - 23:05 RO): Scanare la 15 min + Power Hour (22:00-23:00) -> Raport EOD la 23:00
+    - Raspunde INSTANT la comenzile Telegram (/status, /positions, /scan, /watchlist) si butoane!
     """
     listener = TelegramListener(trader)
-    # 1. Procesam orice apasare de buton [CUMPARA]/[IGNORA] facuta pe telefon de la ultima rulare
-    handled = listener.poll_once(wait_seconds=2)
-    if handled > 0:
-        print(f"📱 S-au procesat {handled} comenzi de pe butoanele Telegram.")
+    listener.poll_once(wait_seconds=2)
 
-    # 2. Verificam daca bursa SUA este deschisa (daca nu este fortat manual)
-    if trader.is_connected and not force:
-        clock = trader.client.get_clock()
-        if not clock.is_open:
-            now = datetime.now().strftime("%H:%M:%S")
-            print(f"[{now}] 🌙 Bursa SUA este INCHISA. Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-            return
-
-        market_time = clock.timestamp
-        if market_time.hour == 9 and market_time.minute < 45:
-            wait_seconds = (45 - market_time.minute) * 60
-            print(f"⏳ Buffer de Deschidere activ (9:30 - 9:45 ET): Se asteapta {45 - market_time.minute} min...")
-            time.sleep(min(wait_seconds, 900))
-
-    # 3. Pornim ascultatorul LIVE de butoane Telegram in fundal pe toata durata sesiunii
-    listener.start()
-
-    # 4. Rulam scanarea automata completa + Position Manager (Breakeven / Trailing Stop / Earnings)
-    run_automated_scan(trader)
-
-    # 5. Daca a fost un test manual (--force) cu bursa inchisa, asteptam 60s pt butoane si iesim
-    if force and trader.is_connected and not trader.client.get_clock().is_open:
-        print("📱 Sesiune test (--force): Asteptare 60s pentru butoanele Telegram...")
-        time.sleep(60)
+    if force:
+        listener.start()
+        run_automated_scan(trader)
+        print("📱 Sesiune test (--force): Ascultare comenzi si butoane Telegram timp de 90s...")
+        time.sleep(90)
         listener.stop()
+        sync_state_to_git()
         return
 
-    # 6. Ramanem ACTIVI timp de ~25 minute pana la urmatorul ciclu de 30 min:
-    #    - Butoanele Telegram [CUMPARA]/[IGNORA] raspund INSTANT (in 1-2 secunde)
-    #    - La fiecare 2 minute verificam pozitiile active (SL / TP1 50% / TP2 50% / Trailing Stop)
-    total_wait = max(0, active_minutes * 60)
-    check_step = 120
-    elapsed = 0
-    print(f"🛡️ Monitorizare ACTIVA timp de {active_minutes} min (Butoane Telegram LIVE + verificare SL/TP la fiecare 2 min)...")
+    # Pornim ascultatorul Telegram in timp real pe toata durata sesiunii
+    listener.start()
+    session_start = time.time()
+    max_seconds = max_minutes * 60
+    was_open_during_session = False
 
-    while elapsed < total_wait:
-        step = min(check_step, total_wait - elapsed)
-        time.sleep(step)
-        elapsed += step
+    print(f"🚀 Sesiune Cloud Continua pornita (durata maxima: {max_minutes} min | Scanare: {config.SCAN_INTERVAL_MINUTES} min | SL/TP check: 60s)")
 
-        if trader.is_connected:
+    while (time.time() - session_start) < max_seconds:
+        if trader.is_connected and trader.client:
             try:
                 clock = trader.client.get_clock()
-                if not clock.is_open:
-                    print("🔔 Bursa SUA s-a inchis. Se finalizeaza sesiunea curenta...")
+                market_time = clock.timestamp
+            except Exception as e:
+                print(f"⚠️ Eroare citire ceas Alpaca: {e}")
+                time.sleep(30)
+                continue
+
+            if not clock.is_open:
+                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni (16:00 ET / 23:00 RO) -> Trimitem Raport EOD!
+                if was_open_during_session or (market_time.hour == 16 and market_time.minute <= 30):
+                    run_eod_report(trader)
+                    print("🔔 Sesiunea de azi s-a incheiat dupa Raportul EOD.")
                     break
 
-                from position_manager import run_position_manager
-                pm_actions = run_position_manager(trader)
-                for act in pm_actions:
-                    now_pm = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{now_pm}] 🛡️ {act['symbol']}: {act['action']} ACTIVAT -> Stop/Exit la ${act['new_stop']:.2f} (Profit: ${act['locked_profit']:+,.2f})")
-            except Exception:
-                pass
+                # Cazul 2: Suntem in Pre-Market (inainte de 9:30 ET / 16:30 RO, cu cel mult 45 min inainte de deschidere)
+                seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
+                if 0 < seconds_to_open <= 2700:
+                    run_premarket_briefing(trader)
+                    wait_sec = min(60, int(seconds_to_open))
+                    print(f"⏳ Pre-Market activ: Bursa se deschide in {int(seconds_to_open // 60)} min...")
+                    time.sleep(wait_sec)
+                    continue
+
+                # Cazul 3: Bursa este inchisa (sarbatoare sau in afara programului)
+                print(f"🌙 Bursa SUA este INCHISA. Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                break
+
+            # Piata este DESCHISA!
+            was_open_during_session = True
+
+            # Daca nu s-a trimis inca briefing-ul azi, il marcam / trimitem
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if ALERTED_TODAY.get("_PREMARKET_SENT_") != today_str and market_time.hour == 9 and market_time.minute < 45:
+                run_premarket_briefing(trader)
+
+            # Buffer de protectie primele 15 minute (9:30 - 9:45 ET / 16:30 - 16:45 RO)
+            if market_time.hour == 9 and market_time.minute < 45:
+                wait_min = 45 - market_time.minute
+                print(f"⏳ Buffer de Deschidere (9:30 - 9:45 ET): Asteptare {wait_min} min (Telegram si Position Manager active)...")
+                try:
+                    from position_manager import run_position_manager
+                    run_position_manager(trader)
+                except Exception:
+                    pass
+                time.sleep(60)
+                continue
+
+        # Executam scanarea la fiecare 15 minute
+        run_automated_scan(trader)
+
+        # Intre scanari (15 min), verificam la fiecare 60 secunde pozitiile (SL/TP1/TP2/Breakeven/Trailing)
+        sleep_seconds = config.SCAN_INTERVAL_MINUTES * 60
+        check_step = 60
+        elapsed = 0
+        while elapsed < sleep_seconds and (time.time() - session_start) < max_seconds:
+            time.sleep(check_step)
+            elapsed += check_step
+
+            if trader.is_connected and trader.client:
+                try:
+                    clock = trader.client.get_clock()
+                    if not clock.is_open:
+                        run_eod_report(trader)
+                        listener.stop()
+                        sync_state_to_git()
+                        return
+
+                    from position_manager import run_position_manager
+                    pm_actions = run_position_manager(trader)
+                    if pm_actions:
+                        for act in pm_actions:
+                            now_pm = datetime.now().strftime("%H:%M:%S")
+                            print(f"[{now_pm}] 🛡️ {act['symbol']}: {act['action']} ACTIVAT -> Stop/Exit la ${act['new_stop']:.2f}")
+                        sync_state_to_git()
+                except Exception:
+                    pass
 
     listener.stop()
+    sync_state_to_git()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Scheduler Autonom Trading Bot")
-    parser.add_argument("--once", action="store_true", help="Ruleaza o singura scanare (pentru Cloud / GitHub Actions)")
+    parser.add_argument("--session", action="store_true", help="Ruleaza o sesiune Cloud continua (~3.5h, scan la 15m, SL/TP la 60s)")
+    parser.add_argument("--once", action="store_true", help="Alias pentru sesiunea Cloud")
     parser.add_argument("--weekend", action="store_true", help="Ruleaza mentenanta si raportul de weekend")
-    parser.add_argument("--force", action="store_true", help="Ruleaza scanarea chiar daca bursa este inchisa")
+    parser.add_argument("--premarket", action="store_true", help="Trimite Briefing-ul Pre-Market")
+    parser.add_argument("--eod", action="store_true", help="Trimite Raportul de Inchidere Bursa (End-of-Day)")
+    parser.add_argument("--force", action="store_true", help="Ruleaza o scanare de test chiar daca bursa este inchisa")
+    parser.add_argument("--max-minutes", type=int, default=215, help="Durata maxima a sesiunii Cloud in minute (default: 215)")
     args = parser.parse_args()
 
     trader = AlpacaTrader()
@@ -303,8 +504,16 @@ def main():
         run_weekend_maintenance(trader)
         return
 
-    if args.once:
-        run_once_cloud(trader, force=args.force)
+    if args.premarket:
+        run_premarket_briefing(trader)
+        return
+
+    if args.eod:
+        run_eod_report(trader)
+        return
+
+    if args.session or args.once:
+        run_cloud_session(trader, force=args.force, max_minutes=args.max_minutes)
         return
 
     print("=" * 65)
@@ -313,66 +522,24 @@ def main():
     print(f"   Interval scanare: {config.SCAN_INTERVAL_MINUTES} minute")
     print("=" * 65)
 
-    # Pornire listener butoane interactive Telegram in fundal
+    # Pornire listener butoane si comenzi interactive Telegram in fundal
     listener = TelegramListener(trader)
     listener.start()
 
-    # Notificare pornire pe Telegram
-    mode_text = "Tranzacționare automată activă" if config.AUTO_TRADE else "Mod Alerte pe telefon"
+    mode_text = "Tranzacționare automată activă" if config.AUTO_TRADE else "Mod Alerte + Confirmare 1-Click"
     send_telegram_message(
         f"🟢 *Maur's Trading Bot a pornit în mod AUTONOM!*\n\n"
         f"⚙️ *Regim:* {mode_text}\n"
-        f"⏱️ *Interval:* La fiecare {config.SCAN_INTERVAL_MINUTES} min în timpul orelor de piață.\n"
-        f"💰 *Capital monitorizat:* ${trader.get_portfolio_summary()['portfolio_value']:,.2f}"
+        f"⏱️ *Interval scanare:* La fiecare {config.SCAN_INTERVAL_MINUTES} min (verificare SL/TP la 60s).\n"
+        f"💬 *Comenzi active:* `/status`, `/positions`, `/scan`, `/watchlist`\n"
+        f"💰 *Capital monitorizat:* `${trader.get_portfolio_summary()['portfolio_value']:,.2f}`",
+        reply_markup=QUICK_MENU_MARKUP,
     )
 
     try:
         while True:
-            # Verificare daca piata este deschisa folosind Alpaca Clock
-            is_market_open = True
-            if trader.is_connected:
-                clock = trader.client.get_clock()
-                is_market_open = clock.is_open
-
-                if not is_market_open:
-                    now = datetime.now().strftime("%H:%M:%S")
-                    print(f"[{now}] 🌙 Bursa SUA este INCHISA. Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-                    time.sleep(60)
-                    continue
-
-                # FILTRU DE PROTECTIE: Primele 15 minute de la deschidere (16:30 - 16:45 ora RO / 9:30 - 9:45 ET)
-                # Evita gap-urile violente si caderile false de la sunetul clopotelului
-                market_time = clock.timestamp
-                if market_time.hour == 9 and market_time.minute < 45:
-                    now = datetime.now().strftime("%H:%M:%S")
-                    wait_minutes = 45 - market_time.minute
-                    print(f"[{now}] ⏳ Buffer de Deschidere activ (9:30 - 9:45 ET): Se asteapta {wait_minutes} min pentru stabilizarea pietei...")
-                    time.sleep(45)
-                    continue
-
-            # Piata este deschisa, rulam scanarea
-            run_automated_scan(trader)
-
-            # Pauza pana la urmatoarea scanare completa, dar cu verificare rapida la fiecare 2 min
-            # a pozitiilor deschise (SL / TP1 50% / TP2 50% / Breakeven / Trailing Stop pt fractii)
-            sleep_seconds = config.SCAN_INTERVAL_MINUTES * 60
-            print(f"⏳ Urmatoarea scanare completa peste {config.SCAN_INTERVAL_MINUTES} minute (monitorizare SL/TP activa la fiecare 2 min)...")
-            check_step = 120
-            elapsed = 0
-            while elapsed < sleep_seconds:
-                step = min(check_step, sleep_seconds - elapsed)
-                time.sleep(step)
-                elapsed += step
-                if elapsed < sleep_seconds and trader.is_connected:
-                    try:
-                        from position_manager import run_position_manager
-                        pm_actions = run_position_manager(trader)
-                        for act in pm_actions:
-                            now_pm = datetime.now().strftime("%H:%M:%S")
-                            print(f"[{now_pm}] 🛡️ {act['symbol']}: {act['action']} ACTIVAT -> Stop/Exit la ${act['new_stop']:.2f} (Profit: ${act['locked_profit']:+,.2f})")
-                    except Exception:
-                        pass
-
+            run_cloud_session(trader, force=False, max_minutes=240)
+            time.sleep(30)
     except (KeyboardInterrupt, SystemExit):
         print("\n🛑 Scheduler oprit manual de utilizator.")
         send_telegram_message("🛑 *Maur's Trading Bot Scheduler a fost oprit.*")

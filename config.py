@@ -121,7 +121,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # --- AUTOMATIZARE & SCHEDULER ---
 AUTO_TRADE = os.getenv("AUTO_TRADE", "False").lower() in ("true", "1", "yes")
-SCAN_INTERVAL_MINUTES = 30
+SCAN_INTERVAL_MINUTES = 15
 
 # --- FILTRU EARNINGS (ANTI-BINARY RISK) ---
 EARNINGS_BUFFER_DAYS = 7        # Blocheaza intrari noi cu <= 7 zile inainte de Earnings
