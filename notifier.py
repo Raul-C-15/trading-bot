@@ -21,9 +21,9 @@ PENDING_SIGNALS = {}
 
 
 def load_telegram_state() -> dict:
-    """Incarca starea persistenta Telegram (semnale in asteptare, alerte zilnice, last_update_id)."""
+    """Incarca starea persistenta Telegram (semnale in asteptare, alerte zilnice, last_update_id, auto_trade)."""
     if not STATE_FILE.exists():
-        return {"pending_signals": {}, "alerted_today": {}, "last_update_id": 0}
+        return {"pending_signals": {}, "alerted_today": {}, "last_update_id": 0, "auto_trade": config.AUTO_TRADE}
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             state = json.load(f)
@@ -31,19 +31,22 @@ def load_telegram_state() -> dict:
         for sig_id, sig_dict in state.get("pending_signals", {}).items():
             if sig_id not in PENDING_SIGNALS and isinstance(sig_dict, dict):
                 PENDING_SIGNALS[sig_id] = SimpleNamespace(**sig_dict)
+        if "auto_trade" in state and isinstance(state["auto_trade"], bool):
+            config.AUTO_TRADE = state["auto_trade"]
         return state
     except Exception:
-        return {"pending_signals": {}, "alerted_today": {}, "last_update_id": 0}
+        return {"pending_signals": {}, "alerted_today": {}, "last_update_id": 0, "auto_trade": config.AUTO_TRADE}
 
 
-def save_telegram_state(alerted_today: dict = None, last_update_id: int = None) -> None:
+def save_telegram_state(alerted_today: dict = None, last_update_id: int = None, auto_trade: bool = None) -> None:
     """Salveaza starea Telegram pe disc pentru persistenta intre rularile Cloud / GitHub Actions."""
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         current = load_telegram_state() if STATE_FILE.exists() else {
             "pending_signals": {},
             "alerted_today": {},
-            "last_update_id": 0
+            "last_update_id": 0,
+            "auto_trade": config.AUTO_TRADE,
         }
         serialized_signals = {}
         # Pastram doar semnalele din ultimele 24 ore
@@ -66,6 +69,11 @@ def save_telegram_state(alerted_today: dict = None, last_update_id: int = None) 
             current["alerted_today"] = alerted_today
         if last_update_id is not None:
             current["last_update_id"] = last_update_id
+        if auto_trade is not None:
+            config.AUTO_TRADE = bool(auto_trade)
+            current["auto_trade"] = bool(auto_trade)
+        elif "auto_trade" not in current:
+            current["auto_trade"] = bool(config.AUTO_TRADE)
 
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(current, f, indent=2, ensure_ascii=False)
@@ -165,6 +173,12 @@ def send_trade_alert(signal, with_buttons: bool = True, is_power_hour: bool = Fa
     rs_str = f"💪 *Putere Relativă (RS vs SPY):* `{rs_score:+.1f}%`\n"
     news_str = f"📰 *Știri (48h):* {news_sent}" + (f" — _{news_head[:85]}_\n" if news_head else "\n")
 
+    exec_mode_str = (
+        "🤖 *Mod Execuție:* `AUTO-TRADE ACTIV (Plasare automată pe Alpaca)`\n"
+        if not with_buttons
+        else "📱 *Mod Execuție:* `Confirmare 1-Click din butonul de mai jos`\n"
+    )
+
     msg = (
         f"{header}\n\n"
         f"📈 *Simbol:* `{signal.ticker}`  |  🏢 *Sector:* `{sector}`\n"
@@ -177,6 +191,7 @@ def send_trade_alert(signal, with_buttons: bool = True, is_power_hour: bool = Fa
         f"{ml_str}"
         f"{news_str}"
         f"🛡️ *Risc Asumat:* Max 1.5% din capital\n"
+        f"{exec_mode_str}"
         f"📝 *Detalii:* {signal.reason}"
     )
 

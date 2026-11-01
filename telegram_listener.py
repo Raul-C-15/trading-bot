@@ -35,6 +35,9 @@ QUICK_MENU_MARKUP = {
             {"text": "🌟 Watchlist Azi", "callback_data": "CMD:WATCHLIST"},
             {"text": "🔎 Scanează Acum", "callback_data": "CMD:SCAN"},
         ],
+        [
+            {"text": "🤖 Comută Auto-Trade (ON / OFF)", "callback_data": "CMD:AUTOTRADE"},
+        ],
     ]
 }
 
@@ -58,6 +61,7 @@ class TelegramListener:
             {"command": "positions", "description": "📂 Poziții deschise, P&L și niveluri Stop-Loss/TP"},
             {"command": "scan", "description": "🔎 Declanșează o scanare live a pieței acum"},
             {"command": "watchlist", "description": "🌟 Lista de lideri monitorizați azi"},
+            {"command": "autotrade", "description": "🤖 Activează / Dezactivează Auto-Trade-ul (ON/OFF)"},
             {"command": "help", "description": "ℹ️ Meniu rapid și lista de comenzi"},
         ]
         try:
@@ -171,7 +175,9 @@ class TelegramListener:
         if not text:
             return
 
-        cmd = text.split()[0].lower().split("@")[0]
+        parts = text.split()
+        cmd = parts[0].lower().split("@")[0]
+        arg = parts[1].lower() if len(parts) > 1 else None
 
         if cmd in ("/status", "status"):
             self._cmd_status()
@@ -181,18 +187,54 @@ class TelegramListener:
             self._cmd_watchlist()
         elif cmd in ("/scan", "scan"):
             self._cmd_scan()
+        elif cmd in ("/autotrade", "autotrade"):
+            self._cmd_autotrade(arg)
         elif cmd in ("/help", "/start", "help", "meniu"):
             self._cmd_help()
 
     def _cmd_help(self):
+        mode_str = "🟢 ACTIVAT (Intrare Automată)" if config.AUTO_TRADE else "🟡 DEZACTIVAT (Confirmare 1-Click)"
         msg = (
             "🤖 *MENIU DE CONTROL — SWING TRADING BOT*\n\n"
             "Poți folosi oricând următoarele comenzi sau butoanele de mai jos:\n"
             "• `/status` — Valoare portofoliu, Cash, Ceas bursă & Regim Piață\n"
             "• `/positions` — Poziții deschise, P&L și niveluri Stop-Loss / TP\n"
             "• `/watchlist` — Liderii monitorizați azi (Smart Hybrid)\n"
-            "• `/scan` — Pornește o scanare completă a pieței acum"
+            "• `/scan` — Pornește o scanare completă a pieței acum\n"
+            f"• `/autotrade` — Comută modul de execuție (Acum: *{mode_str}*)"
         )
+        send_telegram_message(msg, reply_markup=QUICK_MENU_MARKUP)
+
+    def _cmd_autotrade(self, arg: str = None):
+        """Comuta modul AUTO_TRADE direct din Telegram si salveaza starea pe disc/Git."""
+        load_telegram_state()
+        if arg in ("on", "true", "1", "da", "activ"):
+            new_state = True
+        elif arg in ("off", "false", "0", "nu", "manual"):
+            new_state = False
+        else:
+            new_state = not bool(config.AUTO_TRADE)
+
+        config.AUTO_TRADE = new_state
+        save_telegram_state(auto_trade=new_state)
+        try:
+            from scheduler import sync_state_to_git
+            sync_state_to_git()
+        except Exception:
+            pass
+
+        if new_state:
+            msg = (
+                "🤖 *MOD AUTO-TRADE: ACTIVAT (ON)* 🟢\n\n"
+                "De acum, când botul găsește un semnal valid (1W Stage 2 + ML + Știri OK + Sector Cap OK), "
+                "*va plasa automat ordinul pe Alpaca* la prețul optim și îți va trimite confirmarea pe Telegram!"
+            )
+        else:
+            msg = (
+                "📱 *MOD AUTO-TRADE: DEZACTIVAT (OFF — Confirmare 1-Click)* 🟡\n\n"
+                "De acum, botul *nu mai cumpără singur*. Îți va trimite alerta cu butonul "
+                "*`[✅ CUMPĂRĂ]`* și va intra doar când apeși tu pe buton!"
+            )
         send_telegram_message(msg, reply_markup=QUICK_MENU_MARKUP)
 
     def _cmd_status(self):
@@ -344,6 +386,8 @@ class TelegramListener:
                 self._cmd_watchlist()
             elif cmd_type == "SCAN":
                 self._cmd_scan()
+            elif cmd_type == "AUTOTRADE":
+                self._cmd_autotrade()
             return
 
         if data.startswith("BUY:"):

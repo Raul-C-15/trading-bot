@@ -120,7 +120,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # --- AUTOMATIZARE & SCHEDULER ---
-AUTO_TRADE = os.getenv("AUTO_TRADE", "False").lower() in ("true", "1", "yes")
+AUTO_TRADE = os.getenv("AUTO_TRADE", "True").lower() in ("true", "1", "yes")
 SCAN_INTERVAL_MINUTES = 15
 
 # --- FILTRU EARNINGS (ANTI-BINARY RISK) ---

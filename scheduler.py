@@ -70,6 +70,7 @@ def is_us_power_hour(trader: AlpacaTrader) -> bool:
 
 def run_automated_scan(trader: AlpacaTrader):
     """Executa o sesiune de scanare autonoma."""
+    load_telegram_state()
     now_str = datetime.now().strftime("%H:%M:%S")
     today_str = datetime.now().strftime("%Y-%m-%d")
     power_hour = is_us_power_hour(trader)
@@ -180,9 +181,13 @@ def run_automated_scan(trader: AlpacaTrader):
                 )
                 continue
 
+            # Verificare Portfolio Heat daca AUTO_TRADE este activ
+            active_risk_count = trader.get_active_risk_positions_count()
+            can_auto_execute = bool(config.AUTO_TRADE and active_risk_count < max_pos_allowed)
+
             # Deduplicare alerta: trimitem cel mult o alerta pe zi pentru acelasi simbol
             if ALERTED_TODAY.get(ticker) != today_str:
-                send_trade_alert(signal, is_power_hour=power_hour)
+                send_trade_alert(signal, with_buttons=not can_auto_execute, is_power_hour=power_hour)
                 ALERTED_TODAY[ticker] = today_str
                 save_telegram_state(alerted_today=ALERTED_TODAY)
             else:
@@ -190,7 +195,6 @@ def run_automated_scan(trader: AlpacaTrader):
 
             # Daca este activat AUTO_TRADE, plaseaza ordinul direct (in ordinea scorului si in limita Portfolio Heat + Sector Cap)
             if config.AUTO_TRADE:
-                active_risk_count = trader.get_active_risk_positions_count()
                 if active_risk_count >= max_pos_allowed:
                     print(
                         f"[{now_str}] 🛡️ Limita de risc pentru regimul {regime} atinsa "
@@ -208,7 +212,7 @@ def run_automated_scan(trader: AlpacaTrader):
                     tp2_price=signal.tp2,
                     setup_type=signal.setup_type
                 )
-                if res.get("success"):
+                if res:
                     sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
                     active_risk_count += 1
         sync_state_to_git()
