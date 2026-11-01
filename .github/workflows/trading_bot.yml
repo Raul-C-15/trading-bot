@@ -33,7 +33,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
 
     steps:
       - name: 📥 Descarcare cod si stare curenta (Checkout)

@@ -220,9 +220,11 @@ def run_weekend_maintenance(trader: AlpacaTrader):
     print("✅ Mentenanța de weekend s-a încheiat cu succes!")
 
 
-def run_once_cloud(trader: AlpacaTrader, force: bool = False):
+def run_once_cloud(trader: AlpacaTrader, force: bool = False, active_minutes: int = 25):
     """
-    Executa o singura trecere completa (ideal pentru GitHub Actions la fiecare 30 min Luni-Vineri).
+    Executa o sesiune Cloud de 25 de minute (ideal pentru GitHub Actions la fiecare 30 min Luni-Vineri):
+    - Nu doarme intre scanari: tine ascultatorul de butoane Telegram pornit LIVE si
+      verifica la fiecare 2 minute Stop-Loss / TP1 / TP2 / Breakeven / Trailing Stop!
     """
     listener = TelegramListener(trader)
     # 1. Procesam orice apasare de buton [CUMPARA]/[IGNORA] facuta pe telefon de la ultima rulare
@@ -244,15 +246,48 @@ def run_once_cloud(trader: AlpacaTrader, force: bool = False):
             print(f"⏳ Buffer de Deschidere activ (9:30 - 9:45 ET): Se asteapta {45 - market_time.minute} min...")
             time.sleep(min(wait_seconds, 900))
 
-    # 3. Rulam scanarea automata + Position Manager (Breakeven / Trailing Stop / Earnings)
-    signals_found = run_automated_scan(trader)
+    # 3. Pornim ascultatorul LIVE de butoane Telegram in fundal pe toata durata sesiunii
+    listener.start()
 
-    # 4. Daca s-au trimis alerte cu butoane si AUTO_TRADE e False, ascultam 60 secunde
-    # pentru cazul in care utilizatorul apasa [CUMPARA] imediat pe telefon
-    if signals_found and signals_found > 0 and not config.AUTO_TRADE and config.TELEGRAM_BOT_TOKEN:
-        print("📱 Asteptare 60s pentru confirmare rapida pe Telegram (sau se va procesa la rularea urmatoare)...")
-        for _ in range(6):
-            listener.poll_once(wait_seconds=10)
+    # 4. Rulam scanarea automata completa + Position Manager (Breakeven / Trailing Stop / Earnings)
+    run_automated_scan(trader)
+
+    # 5. Daca a fost un test manual (--force) cu bursa inchisa, asteptam 60s pt butoane si iesim
+    if force and trader.is_connected and not trader.client.get_clock().is_open:
+        print("📱 Sesiune test (--force): Asteptare 60s pentru butoanele Telegram...")
+        time.sleep(60)
+        listener.stop()
+        return
+
+    # 6. Ramanem ACTIVI timp de ~25 minute pana la urmatorul ciclu de 30 min:
+    #    - Butoanele Telegram [CUMPARA]/[IGNORA] raspund INSTANT (in 1-2 secunde)
+    #    - La fiecare 2 minute verificam pozitiile active (SL / TP1 50% / TP2 50% / Trailing Stop)
+    total_wait = max(0, active_minutes * 60)
+    check_step = 120
+    elapsed = 0
+    print(f"🛡️ Monitorizare ACTIVA timp de {active_minutes} min (Butoane Telegram LIVE + verificare SL/TP la fiecare 2 min)...")
+
+    while elapsed < total_wait:
+        step = min(check_step, total_wait - elapsed)
+        time.sleep(step)
+        elapsed += step
+
+        if trader.is_connected:
+            try:
+                clock = trader.client.get_clock()
+                if not clock.is_open:
+                    print("🔔 Bursa SUA s-a inchis. Se finalizeaza sesiunea curenta...")
+                    break
+
+                from position_manager import run_position_manager
+                pm_actions = run_position_manager(trader)
+                for act in pm_actions:
+                    now_pm = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{now_pm}] 🛡️ {act['symbol']}: {act['action']} ACTIVAT -> Stop/Exit la ${act['new_stop']:.2f} (Profit: ${act['locked_profit']:+,.2f})")
+            except Exception:
+                pass
+
+    listener.stop()
 
 
 def main():
