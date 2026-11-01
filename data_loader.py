@@ -15,20 +15,50 @@ warnings.filterwarnings("ignore")
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict
+import requests
 import pandas as pd
 import yfinance as yf
 import config
 from indicators import add_all_indicators
 
-# Cache in memorie pentru SPY (evita descarcarea repetata la fiecare ticker scanat)
+# Cache in memorie pentru SPY si pentru Stirile Alpaca
 _SPY_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 _SPY_CACHE_TTL_SECONDS = 900  # 15 minute
+_NEWS_CACHE: Dict[str, Tuple[float, Tuple[bool, float, str, str]]] = {}
+_NEWS_CACHE_TTL_SECONDS = 900
+
+
+def get_alpaca_live_snapshot(ticker: str) -> Optional[dict]:
+    """
+    Preia in timp real (0-latency IEX/SIP) ultimul pret si bara zilnica curenta
+    direct din API-ul Alpaca Market Data v2.
+    """
+    if not getattr(config, "USE_ALPACA_LIVE_DATA", True):
+        return None
+    if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY or ticker.startswith("^"):
+        return None
+
+    url = f"https://data.alpaca.markets/v2/stocks/{ticker.upper()}/snapshot"
+    headers = {
+        "APCA-API-KEY-ID": config.ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=4)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return None
 
 
 def _download_raw_ohlcv(ticker: str, period: str = "2y") -> pd.DataFrame:
-    """Descarca datele brute OHLCV de pe Yahoo Finance si normalizeaza coloanele."""
+    """
+    Descarca datele istorice OHLCV de pe Yahoo Finance si suprapune automat
+    ultimul pret/bara in timp real din Alpaca Market Data API (IEX/SIP).
+    """
     df = yf.download(
         ticker,
         period=period,
@@ -44,6 +74,30 @@ def _download_raw_ohlcv(ticker: str, period: str = "2y") -> pd.DataFrame:
 
     expected_cols = ["Open", "High", "Low", "Close", "Volume"]
     df = df[[c for c in expected_cols if c in df.columns]].dropna(subset=["Close"])
+
+    # Suprapunere pret live din Alpaca (elimina intarzierile Yahoo Finance in timpul sesiunii)
+    snap = get_alpaca_live_snapshot(ticker)
+    if snap and not df.empty:
+        try:
+            latest_trade = snap.get("latestTrade") or {}
+            daily_bar = snap.get("dailyBar") or {}
+            live_price = float(latest_trade.get("p") or daily_bar.get("c") or 0.0)
+            if live_price > 0:
+                last_idx = df.index[-1]
+                df.loc[last_idx, "Close"] = live_price
+                if daily_bar.get("h"):
+                    df.loc[last_idx, "High"] = max(float(df.loc[last_idx, "High"]), float(daily_bar["h"]), live_price)
+                else:
+                    df.loc[last_idx, "High"] = max(float(df.loc[last_idx, "High"]), live_price)
+                if daily_bar.get("l"):
+                    df.loc[last_idx, "Low"] = min(float(df.loc[last_idx, "Low"]), float(daily_bar["l"]), live_price)
+                else:
+                    df.loc[last_idx, "Low"] = min(float(df.loc[last_idx, "Low"]), live_price)
+                if daily_bar.get("v") and float(daily_bar["v"]) > float(df.loc[last_idx, "Volume"]):
+                    df.loc[last_idx, "Volume"] = float(daily_bar["v"])
+        except Exception:
+            pass
+
     return df
 
 
@@ -224,6 +278,109 @@ def check_earnings_risk(
     return False, f"Urmator earnings: {next_earnings.strftime('%d %b %Y')} (peste {days_until} zile) — OK"
 
 
+def check_news_sentiment(ticker: str, limit: int = 8) -> Tuple[bool, float, str, str]:
+    """
+    Analizeaza stirile si catalizatorii din ultimele 48 de ore prin Alpaca News API (gratuit).
+    Returneaza:
+      - is_blocked      : True daca exista un catalizator negativ sever (investigatie SEC, faliment, dilutie, taiere guidance)
+      - sentiment_score : Scor agregat (ex: -3.0 .. +3.0)
+      - sentiment_label : Eticheta lizibila ('🟢 POZITIV', '⚪ NEUTRU', '🔴 NEGATIV SEVER')
+      - latest_headline : Titlul celei mai relevante stiri recente
+    """
+    if not getattr(config, "USE_NEWS_FILTER", True):
+        return False, 0.0, "⚪ NEUTRU", ""
+    if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY:
+        return False, 0.0, "⚪ NEUTRU", ""
+
+    now = time.time()
+    cache_key = ticker.upper()
+    if cache_key in _NEWS_CACHE:
+        ts, cached_val = _NEWS_CACHE[cache_key]
+        if now - ts < _NEWS_CACHE_TTL_SECONDS:
+            return cached_val
+
+    url = "https://data.alpaca.markets/v1beta1/news"
+    headers = {
+        "APCA-API-KEY-ID": config.ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
+    }
+    start_dt = (datetime.utcnow() - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    params = {
+        "symbols": cache_key,
+        "limit": limit,
+        "start": start_dt,
+    }
+
+    severe_negative_terms = [
+        "sec investigation", "doj investigation", "subpoena", "accounting irregularities",
+        "fraud", "bankruptcy", "chapter 11", "delisting", "fda clinical hold",
+        "fda complete response letter", "cuts guidance", "lowers guidance", "slashes guidance",
+        "withdraws guidance", "secondary offering", "public offering of common stock",
+        "share dilution", "auditor resigns", "restatement", "default on debt",
+    ]
+    moderate_negative_terms = [
+        "downgrades", "downgraded to sell", "downgraded to underperform", "misses estimates",
+        "revenue miss", "earnings miss", "class action lawsuit", "antitrust lawsuit",
+        "product recall", "weak demand", "price target cut", "price target lowered",
+    ]
+    positive_terms = [
+        "beats estimates", "raises guidance", "boosts guidance", "lifts guidance",
+        "upgraded to buy", "upgraded to outperform", "price target raised", "record revenue",
+        "fda approval", "share buyback", "stock repurchase", "new ai contract",
+        "strategic partnership", "strong demand", "blowout quarter",
+    ]
+
+    score = 0.0
+    latest_headline = ""
+    severe_trigger = ""
+
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=5)
+        if res.status_code == 200:
+            news_items = res.json().get("news", [])
+            for idx, item in enumerate(news_items):
+                headline = (item.get("headline") or "").strip()
+                summary = (item.get("summary") or "").strip()
+                if idx == 0 and headline:
+                    latest_headline = headline
+
+                text_blob = f"{headline} {summary}".lower()
+
+                for term in severe_negative_terms:
+                    if term in text_blob:
+                        score -= 2.5
+                        if not severe_trigger:
+                            severe_trigger = headline or term
+
+                for term in moderate_negative_terms:
+                    if term in text_blob:
+                        score -= 1.0
+
+                for term in positive_terms:
+                    if term in text_blob:
+                        score += 1.0
+    except Exception:
+        pass
+
+    score = round(max(-5.0, min(5.0, score)), 2)
+    is_blocked = score <= -2.0
+
+    if is_blocked:
+        label = f"🔴 RISC ȘTIRI ({score:+.1f})"
+        if severe_trigger:
+            latest_headline = severe_trigger
+    elif score >= 1.0:
+        label = f"🟢 CATALIZATOR POZITIV ({score:+.1f})"
+    elif score <= -1.0:
+        label = f"🟡 ATENȚIE ȘTIRI ({score:+.1f})"
+    else:
+        label = "⚪ NEUTRU"
+
+    result = (is_blocked, score, label, latest_headline[:110])
+    _NEWS_CACHE[cache_key] = (now, result)
+    return result
+
+
 def screen_top_rs_leaders(
     universe: Optional[List[str]] = None,
     top_n: int = 16
@@ -343,12 +500,18 @@ def get_smart_hybrid_watchlist(force_refresh: bool = False) -> Tuple[List[str], 
     rs_candidates.sort(key=lambda x: x[1], reverse=True)
     top_rs_tickers = [t for t, _ in rs_candidates[:18]]
 
-    # Combinare fără duplicate: Top RS Leaders + Core Pullback Candidates
-    hybrid_list = list(dict.fromkeys(top_rs_tickers + core_kept))
-    if len(hybrid_list) < 15:
-        hybrid_list = list(dict.fromkeys(hybrid_list + _CORE_DEFAULT_WATCHLIST))
+    # Combinare fără duplicate și cu diversificare pe sectoare (max 7 acțiuni per sector în Watchlist):
+    raw_candidates = list(dict.fromkeys(top_rs_tickers + core_kept + _CORE_DEFAULT_WATCHLIST))
+    hybrid_list = []
+    sector_counts: Dict[str, int] = {}
+    for t in raw_candidates:
+        sec = config.get_ticker_sector(t)
+        if sector_counts.get(sec, 0) < 7:
+            hybrid_list.append(t)
+            sector_counts[sec] = sector_counts.get(sec, 0) + 1
+        if len(hybrid_list) >= 35:
+            break
 
-    hybrid_list = hybrid_list[:35]
     config.WATCHLIST = hybrid_list
 
     meta = {
@@ -357,6 +520,7 @@ def get_smart_hybrid_watchlist(force_refresh: bool = False) -> Tuple[List[str], 
         "count": len(hybrid_list),
         "top_rs_added": [t for t in top_rs_tickers if t not in _CORE_DEFAULT_WATCHLIST][:10],
         "top_5_rs": [f"{t} ({rs:+.1f}%)" for t, rs in rs_candidates[:5]],
+        "sectors": sector_counts,
         "watchlist": hybrid_list,
         "from_cache": False
     }

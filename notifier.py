@@ -157,12 +157,17 @@ def send_trade_alert(signal, with_buttons: bool = True, is_power_hour: bool = Fa
     ml_conf = getattr(signal, "ml_confidence", 0.0)
     rs_score = getattr(signal, "rs_score", 0.0)
     comp_score = getattr(signal, "composite_score", 0.0)
+    sector = getattr(signal, "sector", config.get_ticker_sector(signal.ticker))
+    news_sent = getattr(signal, "news_sentiment", "⚪ NEUTRU")
+    news_head = getattr(signal, "news_headline", "")
+
     ml_str = f"🧠 *Încredere ML:* `{ml_conf * 100:.1f}%` | *Scor Global:* `{comp_score:.0f}/100`\n" if ml_conf > 0 else ""
-    rs_str = f"💪 * Putere Relativă (RS vs SPY):* `{rs_score:+.1f}%`\n"
+    rs_str = f"💪 *Putere Relativă (RS vs SPY):* `{rs_score:+.1f}%`\n"
+    news_str = f"📰 *Știri (48h):* {news_sent}" + (f" — _{news_head[:85]}_\n" if news_head else "\n")
 
     msg = (
         f"{header}\n\n"
-        f"📈 *Simbol:* `{signal.ticker}`\n"
+        f"📈 *Simbol:* `{signal.ticker}`  |  🏢 *Sector:* `{sector}`\n"
         f"💵 *Pret Intrare:* `${signal.entry_price:.2f}`\n"
         f"🛑 *Stop-Loss:* `${signal.stop_loss:.2f}`\n"
         f"🎯 *TP1 (50% Lot 1 -> Free-Roll):* `${signal.tp1:.2f}`\n"
@@ -170,6 +175,7 @@ def send_trade_alert(signal, with_buttons: bool = True, is_power_hour: bool = Fa
         f"📊 *Marime Pozitie:* `{qty_str}` actiuni (~${qty_val * signal.entry_price:,.2f})\n"
         f"{rs_str}"
         f"{ml_str}"
+        f"{news_str}"
         f"🛡️ *Risc Asumat:* Max 1.5% din capital\n"
         f"📝 *Detalii:* {signal.reason}"
     )

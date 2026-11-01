@@ -125,9 +125,14 @@ def run_automated_scan(trader: AlpacaTrader):
     summary = trader.get_portfolio_summary()
     capital = summary["portfolio_value"]
 
-    # Verificare pozitii deja deschise pentru a nu dubla acelasi ticker
+    # Verificare pozitii deja deschise pentru a nu dubla acelasi ticker si pentru diversificare pe sectoare
     open_positions = trader.get_open_positions()
     open_symbols = {p["symbol"] for p in open_positions}
+    sector_exposure = {}
+    for p in open_positions:
+        sec = config.get_ticker_sector(p["symbol"])
+        sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
+    max_per_sector = getattr(config, "MAX_POSITIONS_PER_SECTOR", 2)
 
     buy_signals = []
 
@@ -148,22 +153,32 @@ def run_automated_scan(trader: AlpacaTrader):
 
             if signal.action == "BUY":
                 buy_signals.append(signal)
-            elif "ML FILTER" in signal.reason:
-                print(f"[{now_str}] 🤖 {ticker}: Filtrul ML a respins semnalul ({signal.reason})")
+            elif "ML FILTER" in signal.reason or "NEWS RISK FILTER" in signal.reason:
+                print(f"[{now_str}] 🛡️ {ticker}: Semnal filtrat ({signal.reason})")
         except Exception as e:
             print(f"[{now_str}] Eroare evaluare {ticker}: {e}")
 
-    # 3. Sortam semnalele descrescator dupa Scorul Compozit (ML Confidence + RS vs SPY)
+    # 3. Sortam semnalele descrescator dupa Scorul Compozit (ML Confidence + RS vs SPY + News)
     if buy_signals:
         buy_signals.sort(key=lambda s: getattr(s, "composite_score", 0.0), reverse=True)
 
         for signal in buy_signals:
             ticker = signal.ticker
+            sec = getattr(signal, "sector", config.get_ticker_sector(ticker))
             ml_conf = getattr(signal, "ml_confidence", 0.0)
             rs_val = getattr(signal, "rs_score", 0.0)
             comp_val = getattr(signal, "composite_score", 0.0)
-            ml_log = f" | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | Scor: {comp_val:.0f}/100"
+            news_lbl = getattr(signal, "news_sentiment", "⚪ NEUTRU")
+            ml_log = f" | Sector: {sec} | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | News: {news_lbl} | Scor: {comp_val:.0f}/100"
             print(f"[{now_str}] 🎯 Semnal BUY gasit: {ticker} @ ${signal.entry_price}{ml_log}")
+
+            # Verificare Limita de Concentrare pe Sector (ex: max 2 pozitii pe SEMICONDUCTORS)
+            if sector_exposure.get(sec, 0) >= max_per_sector:
+                print(
+                    f"[{now_str}] 🏢 SECTOR CAP: Sectorul {sec} are deja {sector_exposure[sec]}/{max_per_sector} "
+                    f"pozitii deschise. Se omite {ticker} pentru protectia portofoliului."
+                )
+                continue
 
             # Deduplicare alerta: trimitem cel mult o alerta pe zi pentru acelasi simbol
             if ALERTED_TODAY.get(ticker) != today_str:
@@ -173,7 +188,7 @@ def run_automated_scan(trader: AlpacaTrader):
             else:
                 print(f"[{now_str}] ℹ️ Alerta Telegram pentru {ticker} a fost deja trimisa astazi ({today_str}).")
 
-            # Daca este activat AUTO_TRADE, plaseaza ordinul direct (in ordinea scorului si in limita Portfolio Heat)
+            # Daca este activat AUTO_TRADE, plaseaza ordinul direct (in ordinea scorului si in limita Portfolio Heat + Sector Cap)
             if config.AUTO_TRADE:
                 active_risk_count = trader.get_active_risk_positions_count()
                 if active_risk_count >= max_pos_allowed:
@@ -183,8 +198,8 @@ def run_automated_scan(trader: AlpacaTrader):
                     )
                     continue
 
-                print(f"[{now_str}] 🤖 AUTO-TRADE ACTIVAT: Se plaseaza ordinul pentru {ticker}...")
-                trader.place_bracket_buy_order(
+                print(f"[{now_str}] 🤖 AUTO-TRADE ACTIVAT: Se plaseaza ordinul pentru {ticker} ({sec})...")
+                res = trader.place_bracket_buy_order(
                     symbol=signal.ticker,
                     qty=signal.shares,
                     limit_price=signal.entry_price,
@@ -193,6 +208,9 @@ def run_automated_scan(trader: AlpacaTrader):
                     tp2_price=signal.tp2,
                     setup_type=signal.setup_type
                 )
+                if res.get("success"):
+                    sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
+                    active_risk_count += 1
         sync_state_to_git()
         return len(buy_signals)
     else:

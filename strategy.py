@@ -91,6 +91,10 @@ class TradeSignal:
     ml_confidence: float = 0.0
     rs_score: float = 0.0          # Forta Relativa vs SPY (%)
     composite_score: float = 0.0   # Scor global de prioritizare a semnalului
+    sector: str = "OTHER"          # Sectorul industrial (ex: SEMICONDUCTORS)
+    news_sentiment: str = "⚪ NEUTRU"
+    news_headline: str = ""
+    news_score: float = 0.0
 
 
 def calculate_position_size(
@@ -367,11 +371,13 @@ def _compute_composite_score(signal: TradeSignal) -> float:
     apar mai multe oportunitati in aceeasi zi decat numarul de locuri in portofoliu:
       - 60% pondere din increderea modelului ML (daca este activ)
       - 40% pondere din Forta Relativa fata de SPY (RS_vs_SPY normalizat)
+      - Bonus/Penalizare Catalizator Știri (-5 la +5 puncte)
     """
     ml_part = (signal.ml_confidence if signal.ml_confidence > 0 else 0.55) * 60.0
     rs_clamped = max(-10.0, min(40.0, signal.rs_score))
     rs_part = ((rs_clamped + 10.0) / 50.0) * 40.0
-    return round(ml_part + rs_part, 2)
+    news_bonus = max(-5.0, min(5.0, getattr(signal, "news_score", 0.0) * 2.5))
+    return round(max(0.0, min(100.0, ml_part + rs_part + news_bonus)), 2)
 
 
 def _apply_ml_filter(ticker: str, df: pd.DataFrame, signal: "TradeSignal") -> "TradeSignal":
@@ -542,19 +548,53 @@ def analyze_ticker(
         )
 
     # 1. Testare Scenariul 1: Pullback Confirmat la EMA 20
-    pullback = check_pullback_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
-    if pullback:
-        pullback.reason = f"{pullback.reason} [📅 1W Stage 2]"
-        return _apply_ml_filter(ticker, df, pullback)
+    candidate = check_pullback_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
 
     # 2. Testare Scenariul 2: Breakout de Volum (in Cautious Uptrend cerem RS >= +5% pentru extra siguranta)
-    breakout = check_breakout_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
-    if breakout:
-        if market_regime == "CAUTIOUS_UPTREND" and breakout.rs_score < 5.0:
-            pass  # In piata precauta permitem breakout doar pe super-lideri (RS >= +5%)
-        else:
-            breakout.reason = f"{breakout.reason} [📅 1W Stage 2]"
-            return _apply_ml_filter(ticker, df, breakout)
+    if not candidate:
+        breakout = check_breakout_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
+        if breakout:
+            if market_regime == "CAUTIOUS_UPTREND" and breakout.rs_score < 5.0:
+                pass  # In piata precauta permitem breakout doar pe super-lideri (RS >= +5%)
+            else:
+                candidate = breakout
+
+    if candidate:
+        candidate.sector = config.get_ticker_sector(ticker)
+        candidate.reason = f"{candidate.reason} [📅 1W Stage 2]"
+
+        # 3. Verificare Catalizatori Știri & Sentiment Live (Alpaca News API)
+        try:
+            from data_loader import check_news_sentiment
+            is_blocked, news_label, news_headline, news_score = check_news_sentiment(ticker)
+            candidate.news_sentiment = news_label
+            candidate.news_headline = news_headline
+            candidate.news_score = news_score
+
+            if is_blocked:
+                return TradeSignal(
+                    ticker=ticker,
+                    action="NO_TRADE",
+                    setup_type="NONE",
+                    entry_price=candidate.entry_price,
+                    stop_loss=0.0,
+                    tp1=0.0,
+                    tp2=0.0,
+                    risk_per_share=0.0,
+                    risk_reward_ratio=0.0,
+                    shares=0.0,
+                    position_cost=0.0,
+                    reason=f"📰 NEWS RISK FILTER: Catalizator negativ sever ({news_label}) — {news_headline}",
+                    rs_score=last_rs,
+                    sector=candidate.sector,
+                    news_sentiment=news_label,
+                    news_headline=news_headline,
+                    news_score=news_score,
+                )
+        except Exception:
+            pass
+
+        return _apply_ml_filter(ticker, df, candidate)
 
     last = df.iloc[-1]
     close = float(last["Close"])
