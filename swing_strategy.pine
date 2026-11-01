@@ -1,0 +1,236 @@
+//@version=5
+strategy("Institutional Swing Trading Strategy (Pullback & Breakout)", shorttitle="Swing Bot Pro", overlay=true, initial_capital=10000, default_qty_type=strategy.fixed, currency=currency.USD, process_orders_on_close=true, calc_on_every_tick=false, max_labels_count=500, max_lines_count=500)
+
+// ============================================================================
+// 1. INPUT PARAMETERS (ALINIATE CU CONFIG.PY)
+// ============================================================================
+grp_risk = "1. Managementul Riscului & Capitalului"
+risk_per_trade_pct = input.float(1.5, "Risc per Tranzactie (% din Capital)", minval=0.1, maxval=5.0, step=0.1, group=grp_risk)
+max_open_positions = input.int(4, "Numar Maxim Pozitii (Plafon Alocare)", minval=1, maxval=10, group=grp_risk)
+min_rr = input.float(1.5, "Raport R:R pentru TP1 (50% Scale-Out)", minval=1.0, maxval=5.0, step=0.1, group=grp_risk)
+tp2_rr = input.float(3.0, "Raport R:R pentru TP2 (Runner 50%)", minval=1.5, maxval=10.0, step=0.5, group=grp_risk)
+tp1_exit_pct = input.float(50.0, "Procent Inchis la TP1 (%)", minval=10.0, maxval=90.0, step=5.0, group=grp_risk)
+
+grp_tech = "2. Parametri Tehnici Zilnici (1D)"
+ema_pullback_len = input.int(20, "Perioada EMA Pullback", minval=5, maxval=50, group=grp_tech)
+sma_stock_len = input.int(50, "Perioada SMA Trend Actiune", minval=20, maxval=100, group=grp_tech)
+sma_market_len = input.int(200, "Perioada SMA Trend Major", minval=100, maxval=300, group=grp_tech)
+rsi_len = input.int(14, "Perioada RSI", minval=5, maxval=30, group=grp_tech)
+rsi_pb_min = input.float(38.0, "RSI Pullback Minim", minval=20.0, maxval=50.0, step=1.0, group=grp_tech)
+rsi_pb_max = input.float(56.0, "RSI Pullback Maxim", minval=45.0, maxval=70.0, step=1.0, group=grp_tech)
+vol_avg_len = input.int(20, "Perioada Medie Volum", minval=5, maxval=50, group=grp_tech)
+vol_surge_mult = input.float(1.25, "Multiplicator Volum Breakout (1.25 = 125%)", minval=1.0, maxval=3.0, step=0.05, group=grp_tech)
+max_bo_ext = input.float(0.12, "Extensie Max Breakout fata de EMA20 (0.12 = 12%)", minval=0.05, maxval=0.30, step=0.01, group=grp_tech)
+
+grp_rs = "3. Regim Piata & Forta Relativa (RS vs SPY)"
+use_market_filter = input.bool(true, "Activeaza Filtru Regim Piata (SPY > SMA 200)", group=grp_rs)
+benchmark_sym = input.symbol("SPY", "Simbol Benchmark Piata (SPY)", group=grp_rs)
+use_rs_filter = input.bool(true, "Activeaza Filtru Forta Relativa (RS vs SPY)", group=grp_rs)
+min_rs_pullback = input.float(-5.0, "Scor RS Minim pentru Pullback (%)", minval=-20.0, maxval=20.0, step=0.5, group=grp_rs)
+min_rs_breakout = input.float(0.0, "Scor RS Minim pentru Breakout (%)", minval=-10.0, maxval=25.0, step=0.5, group=grp_rs)
+
+grp_mtf = "4. Confluenta Multi-Timeframe (1W Stage 2)"
+use_weekly_filter = input.bool(true, "Activeaza Filtru Saptamanal (1W Stage 2)", group=grp_mtf)
+weekly_ema_len = input.int(10, "Weekly EMA Period (10W ~ 50D)", minval=5, maxval=30, group=grp_mtf)
+weekly_sma_len = input.int(30, "Weekly SMA Period (30W Weinstein)", minval=10, maxval=60, group=grp_mtf)
+weekly_rsi_min = input.float(40.0, "Weekly RSI Minim", minval=20.0, maxval=60.0, step=1.0, group=grp_mtf)
+weekly_rsi_max = input.float(72.0, "Weekly RSI Maxim", minval=60.0, maxval=85.0, step=1.0, group=grp_mtf)
+
+grp_vis = "5. Afisare Vizuala"
+show_dashboard = input.bool(true, "Afiseaza Tabelul HUD (Dashboard)", group=grp_vis)
+show_tp_sl_lines = input.bool(true, "Afiseaza Liniile Active SL / TP1 / TP2", group=grp_vis)
+
+// ============================================================================
+// 2. INDICATORI ZILNICI (1D)
+// ============================================================================
+ema20 = ta.ema(close, ema_pullback_len)
+sma50 = ta.sma(close, sma_stock_len)
+sma200 = ta.sma(close, sma_market_len)
+rsi14 = ta.rsi(close, rsi_len)
+atr14 = ta.atr(14)
+vol_sma20 = ta.sma(volume, vol_avg_len)
+sma50_slope = nz(((sma50 - sma50[5]) / sma50[5]) * 100.0, 0.0)
+
+prior_20_high = ta.highest(high, 20)[1]
+low_3d = ta.lowest(low, 3)[1]
+recent_low_4d = ta.lowest(low, 4)
+recent_low_3d = ta.lowest(low, 3)
+
+// ============================================================================
+// 3. FORTA RELATIVA (IBD WEIGHTED ROC VS SPY) & REGIM PIATA
+// ============================================================================
+f_weighted_roc(src) =>
+    r20 = nz(ta.roc(src, 20), 0.0)
+    r60 = nz(ta.roc(src, 60), r20)
+    r120 = nz(ta.roc(src, 120), r60)
+    0.40 * r20 + 0.30 * r60 + 0.30 * r120
+
+[spy_close, spy_sma200, spy_sma50] = request.security(benchmark_sym, timeframe.period, [close, ta.sma(close, 200), ta.sma(close, 50)], lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+stock_roc = f_weighted_roc(close)
+spy_roc = f_weighted_roc(spy_close)
+rs_vs_spy = na(spy_close) ? stock_roc : (stock_roc - spy_roc)
+
+is_market_bullish = not use_market_filter or na(spy_close) or na(spy_sma200) or (spy_close > spy_sma200)
+is_power_trend = not na(spy_close) and not na(spy_sma50) and not na(spy_sma200) and (spy_close > spy_sma50 and spy_close > spy_sma200)
+
+// ============================================================================
+// 4. MULTI-TIMEFRAME 1W CONFLUENCE (FARA LOOKAHEAD BIAS)
+// ============================================================================
+[w_ema10, w_sma30, w_rsi14] = request.security(syminfo.tickerid, "W", [ta.ema(close, weekly_ema_len)[1], ta.sma(close, weekly_sma_len)[1], ta.rsi(close, 14)[1]], lookahead=barmerge.lookahead_off)
+
+weekly_valid_data = not na(w_ema10) and not na(w_sma30) and w_ema10 > 0 and w_sma30 > 0
+weekly_rsi_ok = na(w_rsi14) or (w_rsi14 >= weekly_rsi_min and w_rsi14 <= weekly_rsi_max)
+weekly_ok = not use_weekly_filter or not weekly_valid_data or (close >= w_sma30 * 0.99 and close >= w_ema10 * 0.98 and w_ema10 >= w_sma30 * 0.97 and weekly_rsi_ok)
+
+// ============================================================================
+// 5. CONDITII DE INTRARE (PULLBACK EMA 20 & VOLUME BREAKOUT)
+// ============================================================================
+trend_ok = close > sma50 and sma50_slope >= -0.50
+is_green = close > open
+
+// --- SCENARIUL 1: PULLBACK LA EMA 20 ---
+dist_to_ema = ema20 > 0 ? math.abs(close - ema20) / ema20 : 1.0
+touched_ema = (low <= ema20 * 1.01) and (close >= ema20 * 0.99)
+valid_ema_zone = (dist_to_ema <= 0.025 and close >= ema20 * 0.99) or touched_ema
+rsi_pb_ok = rsi14 >= rsi_pb_min and rsi14 <= rsi_pb_max
+rs_pb_ok = not use_rs_filter or na(rs_vs_spy) or (rs_vs_spy >= min_rs_pullback)
+
+is_pullback = is_market_bullish and weekly_ok and trend_ok and valid_ema_zone and rsi_pb_ok and is_green and rs_pb_ok
+
+// --- SCENARIUL 2: VOLUME BREAKOUT ---
+candle_range = high - low
+strong_close = candle_range > 0 and ((close - low) / candle_range) >= 0.60
+not_overextended = ema20 <= 0 or ((close - ema20) / ema20) <= max_bo_ext
+vol_surge = vol_sma20 > 0 and volume >= (vol_surge_mult * vol_sma20)
+rsi_bo_ok = rsi14 >= 52.0 and rsi14 <= 76.0
+rs_bo_ok = not use_rs_filter or na(rs_vs_spy) or (rs_vs_spy >= min_rs_breakout)
+
+is_breakout = is_market_bullish and weekly_ok and trend_ok and (close > prior_20_high) and vol_surge and rsi_bo_ok and is_green and strong_close and not_overextended and rs_bo_ok
+
+// ============================================================================
+// 6. EXECUTIE POZITII, STOP-LOSS, TP1, TP2 & TRAILING STOP DINAMIC
+// ============================================================================
+var float active_entry = na
+var float active_sl = na
+var float active_init_r = na
+var float active_tp1 = na
+var float active_tp2 = na
+var float peak_price = na
+var bool tp1_hit = false
+var string active_setup = ""
+
+in_position = strategy.position_size > 0
+
+if not in_position
+    tp1_hit := false
+    active_entry := na
+    active_sl := na
+    active_tp1 := na
+    active_tp2 := na
+    peak_price := na
+
+new_signal = not in_position and (is_pullback or is_breakout)
+
+if new_signal
+    setup_type = is_breakout and not is_pullback ? "VOLUME_BREAKOUT" : "PULLBACK_EMA20"
+    entry_p = close
+    raw_sl = setup_type == "VOLUME_BREAKOUT" ? math.max(prior_20_high * 0.98, recent_low_3d) : math.min(recent_low_4d, low - (0.35 * nz(atr14, close * 0.02)))
+    stop_dist_pct = (entry_p - raw_sl) / entry_p
+
+    sl_p = raw_sl
+    if sl_p >= entry_p or stop_dist_pct < 0.025
+        sl_p := entry_p * 0.972
+    else if stop_dist_pct > 0.055
+        sl_p := entry_p * 0.945
+
+    risk_per_share = entry_p - sl_p
+    if risk_per_share > 0
+        tp1_p = entry_p + (min_rr * risk_per_share)
+        tp2_p = entry_p + (tp2_rr * risk_per_share)
+
+        dollar_risk = strategy.equity * (risk_per_trade_pct / 100.0)
+        raw_shares = dollar_risk / risk_per_share
+        max_cap = strategy.equity / max_open_positions
+        if (raw_shares * entry_p) > max_cap
+            raw_shares := max_cap / entry_p
+
+        shares = math.max(1.0, math.round(raw_shares))
+        active_entry := entry_p
+        active_sl := sl_p
+        active_init_r := risk_per_share
+        active_tp1 := tp1_p
+        active_tp2 := tp2_p
+        peak_price := entry_p
+        tp1_hit := false
+        active_setup := setup_type
+
+        strategy.entry("LONG", strategy.long, qty=shares, comment=setup_type)
+        strategy.exit("TP1 (50%)", from_entry="LONG", qty_percent=tp1_exit_pct, limit=active_tp1, stop=active_sl)
+        strategy.exit("TP2 / Trail", from_entry="LONG", limit=active_tp2, stop=active_sl)
+        lbl_txt = (setup_type == "VOLUME_BREAKOUT" ? "BREAKOUT\nSL: $" : "PULLBACK\nSL: $") + str.tostring(sl_p, "#.##")
+        lbl_col = setup_type == "VOLUME_BREAKOUT" ? color.new(color.teal, 10) : color.new(color.green, 10)
+        label.new(bar_index, low, text=lbl_txt, style=label.style_label_up, color=lbl_col, textcolor=color.white, size=size.small)
+
+if in_position and not na(active_entry)
+    peak_price := math.max(nz(peak_price, high), high)
+
+    if not tp1_hit and high >= active_tp1
+        tp1_hit := true
+        be_sl = active_entry * 1.0015
+        active_sl := math.max(active_sl, be_sl)
+
+    be_trigger = math.min(active_entry * 1.03, active_entry + active_init_r)
+    if not tp1_hit and high >= be_trigger
+        active_sl := math.max(active_sl, active_entry * 1.002)
+
+    if tp1_hit
+        chandelier_stop = peak_price * 0.962
+        structural_stop = not na(low_3d) ? math.max(ema20 * 0.988, low_3d * 0.995) : chandelier_stop
+        candidate_trail = math.max(chandelier_stop, structural_stop)
+        if candidate_trail > active_sl and candidate_trail < close
+            active_sl := candidate_trail
+
+    strategy.exit("TP1 (50%)", from_entry="LONG", qty_percent=tp1_exit_pct, limit=active_tp1, stop=active_sl)
+    strategy.exit("TP2 / Trail", from_entry="LONG", limit=active_tp2, stop=active_sl)
+
+// ============================================================================
+// 7. PLOTARE MEDIA MOBILA, SEMNALE SI DASHBOARD HUD
+// ============================================================================
+plot(ema20, "EMA 20 (Pullback Support)", color=color.aqua, linewidth=2)
+plot(sma50, "SMA 50 (Institutional Trend)", color=color.orange, linewidth=2)
+plot(sma200, "SMA 200 (Major Trend)", color=color.red, linewidth=2)
+
+plotshape(new_signal and is_pullback, title="Semnal Pullback", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="PB")
+plotshape(new_signal and is_breakout and not is_pullback, title="Semnal Breakout", style=shape.triangleup, location=location.belowbar, color=color.teal, size=size.small, text="BO")
+
+plot(in_position and show_tp_sl_lines ? active_sl : na, "Active Stop-Loss", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(in_position and show_tp_sl_lines and not tp1_hit ? active_tp1 : na, "Active TP1 (1.5R)", color=color.lime, style=plot.style_linebr, linewidth=1)
+plot(in_position and show_tp_sl_lines ? active_tp2 : na, "Active TP2 (3.0R)", color=color.green, style=plot.style_linebr, linewidth=2)
+
+var table hud = table.new(position.top_right, 2, 7, bgcolor=color.new(#131722, 10), border_color=color.new(color.gray, 60), border_width=1)
+if barstate.islast and show_dashboard
+    regime_txt = not is_market_bullish ? "BEARISH (CASH)" : (is_power_trend ? "POWER TREND" : "CAUTIOUS UPTREND")
+    regime_col = not is_market_bullish ? color.red : (is_power_trend ? color.lime : color.orange)
+    rs_prefix = rs_vs_spy >= 0 ? "+" : ""
+
+    table.cell(hud, 0, 0, "SWING BOT PRO", text_color=color.white, bgcolor=color.new(#2962FF, 20), text_size=size.small)
+    table.cell(hud, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=color.new(#2962FF, 20), text_size=size.small)
+
+    table.cell(hud, 0, 1, "Regim Piata (SPY)", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 1, regime_txt, text_color=regime_col, text_size=size.small)
+
+    table.cell(hud, 0, 2, "Confluenta 1W Stage 2", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 2, weekly_ok ? "BULLISH" : "SUB TREND", text_color=weekly_ok ? color.lime : color.red, text_size=size.small)
+
+    table.cell(hud, 0, 3, "RS vs SPY (IBD)", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 3, rs_prefix + str.tostring(rs_vs_spy, "#.1") + "%", text_color=rs_vs_spy >= 0 ? color.lime : color.orange, text_size=size.small)
+
+    table.cell(hud, 0, 4, "RSI (14) Zilnic", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 4, str.tostring(rsi14, "#.1"), text_color=color.white, text_size=size.small)
+
+    table.cell(hud, 0, 5, "Status Pozitie", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 5, in_position ? (tp1_hit ? "RUNNER (SL @ BE+)" : "ACTIVA (" + active_setup + ")") : "IN ASTEPTARE", text_color=in_position ? color.lime : color.gray, text_size=size.small)
+
+    table.cell(hud, 0, 6, "Stop-Loss Activ", text_color=color.silver, text_size=size.small)
+    table.cell(hud, 1, 6, in_position ? "$" + str.tostring(active_sl, "#.##") : "-", text_color=in_position ? color.yellow : color.gray, text_size=size.small)

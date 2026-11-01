@@ -1,0 +1,54 @@
+{
+    "TSLA": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 375.84,
+        "initial_stop": 390.31,
+        "initial_risk": 0.01,
+        "initial_qty": 65.0,
+        "peak_price": 406.05,
+        "breakeven_active": true,
+        "last_stop_price": 390.31,
+        "updated_at": "2026-10-29 17:50:44"
+    },
+    "TSM": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 438.645965,
+        "initial_stop": 414.55,
+        "initial_risk": 24.09596499999998,
+        "initial_qty": 57.0,
+        "peak_price": 435.11,
+        "breakeven_active": false,
+        "last_stop_price": 414.55,
+        "updated_at": "2026-10-29 17:50:44"
+    },
+    "CRWD": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 257.56,
+        "initial_stop": 245.44,
+        "initial_risk": 12.12,
+        "tp1": 275.74,
+        "tp2": 293.92,
+        "initial_qty": 0.8045,
+        "peak_price": 260.53,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 245.44,
+        "updated_at": "2026-10-29 17:53:44"
+    },
+    "PANW": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 375.19,
+        "initial_stop": 360.65,
+        "initial_risk": 14.54,
+        "tp1": 397.0,
+        "tp2": 418.81,
+        "initial_qty": 0.6669,
+        "peak_price": 378.995,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 360.65,
+        "updated_at": "2026-10-29 18:25:51"
+    }
+}

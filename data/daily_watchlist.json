@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-29",
+  "updated_at": "2026-10-29 17:51",
+  "count": 25,
+  "top_rs_added": [
+    "ZS",
+    "ABBV",
+    "LMT",
+    "CVX",
+    "SPOT",
+    "URI",
+    "SPGI",
+    "VRTX",
+    "TSLA"
+  ],
+  "top_5_rs": [
+    "ZS (+40.9%)",
+    "CRWD (+32.3%)",
+    "LLY (+24.4%)",
+    "SHOP (+23.0%)",
+    "ABBV (+22.2%)"
+  ],
+  "watchlist": [
+    "ZS",
+    "CRWD",
+    "LLY",
+    "SHOP",
+    "ABBV",
+    "LMT",
+    "PANW",
+    "PLTR",
+    "CVX",
+    "SPOT",
+    "XOM",
+    "MA",
+    "V",
+    "URI",
+    "SPGI",
+    "VRTX",
+    "TSLA",
+    "AAPL",
+    "MSFT",
+    "ORCL",
+    "TSM",
+    "JPM",
+    "ISRG",
+    "WMT",
+    "COST"
+  ],
+  "from_cache": false
+}
