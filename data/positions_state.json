@@ -20,20 +20,5 @@
         "breakeven_active": false,
         "last_stop_price": 414.55,
         "updated_at": "2026-10-29 17:50:44"
-    },
-    "CRWD": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 257.56,
-        "initial_stop": 245.44,
-        "initial_risk": 12.12,
-        "tp1": 275.74,
-        "tp2": 293.92,
-        "initial_qty": 0.8045,
-        "peak_price": 260.53,
-        "tp1_hit": false,
-        "breakeven_active": false,
-        "fractional_managed": true,
-        "last_stop_price": 245.44,
-        "updated_at": "2026-10-29 17:53:44"
     }
 }
