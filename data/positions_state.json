@@ -35,20 +35,5 @@
         "fractional_managed": true,
         "last_stop_price": 245.44,
         "updated_at": "2026-10-29 17:53:44"
-    },
-    "PANW": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 375.19,
-        "initial_stop": 360.65,
-        "initial_risk": 14.54,
-        "tp1": 397.0,
-        "tp2": 418.81,
-        "initial_qty": 0.6669,
-        "peak_price": 378.995,
-        "tp1_hit": false,
-        "breakeven_active": false,
-        "fractional_managed": true,
-        "last_stop_price": 360.65,
-        "updated_at": "2026-10-29 18:25:51"
     }
 }
