@@ -2,11 +2,11 @@ name: 🤖 Swing Trading Bot (Full-Session Cloud + Weekend)
 
 on:
   schedule:
-    # 1. Luni - Vineri (Arhitectura Full-Session):
-    # Porneste la 16:10 RO (Pre-Market Briefing) si ruleaza in 2 sesiuni continue de ~3.5 ore
-    # pana la inchiderea bursei (23:05 RO -> Raport End-of-Day).
+    # 1. Luni - Vineri (Arhitectura Full-Session + Verificari Matinale/Seara):
+    # Porneste in Pre-Market si ruleaza in sesiuni continue pana dupa inchiderea bursei (Raport End-of-Day).
     # Cu 'concurrency' activ, daca o sesiune ruleaza deja, nu este intrerupta, iar urmatoarea preia stafeta fara goluri!
-    - cron: '10,40 13-21 * * 1-5'
+    - cron: '10,40 13-22 * * 1-5'
+    - cron: '15 7,10,12 * * 1-5'
 
     # 2. Weekend (Duminica la 16:00 UTC / 18:00-19:00 RO):
     # Reantreneaza modelul ML XGBoost, actualizeaza Watchlist-ul de lideri si trimite Raportul pe Telegram

@@ -146,7 +146,7 @@ class PositionManager:
                         self.trader.client.close_position(symbol)
                         pnl_realized = round((current_price - entry_price) * qty, 2)
                         exit_label = "TRAILING_STOP_EXIT" if current_stop > entry_price * 1.005 else ("BREAKEVEN_EXIT" if stock_state.get("breakeven_active") else "STOP_LOSS_EXIT")
-                        actions_taken.append({
+                        act_sl = {
                             "symbol": symbol,
                             "action": exit_label,
                             "old_stop": current_stop,
@@ -154,7 +154,9 @@ class PositionManager:
                             "current_price": current_price,
                             "locked_profit": pnl_realized,
                             "shares": qty
-                        })
+                        }
+                        actions_taken.append(act_sl)
+                        self._send_telegram_update(act_sl, plpc)
                         self.state.pop(symbol, None)
                         continue
                     except Exception as e:
@@ -294,7 +296,37 @@ class PositionManager:
             cur_p = info["current_price"]
             locked = info["locked_profit"]
 
-            if act == "TRAILING_STOP":
+            if act == "STOP_LOSS_EXIT":
+                title = "🛑 *POZIȚIE ÎNCHISĂ LA STOP-LOSS*"
+                desc = (
+                    f"Acțiunea `{sym}` a atins nivelul de protecție Stop-Loss (`${old_s:.2f}`).\n\n"
+                    f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
+                    f"• Rezultat Realizat: *${locked:+,.2f}*\n"
+                    f"🛡️ *Capitalul a fost protejat și simbolul intră în Cooldown.*"
+                )
+            elif act in ("BREAKEVEN_EXIT", "TRAILING_STOP_EXIT"):
+                title = "🔒 *POZIȚIE ÎNCHISĂ PE PROFIT / BREAKEVEN*"
+                desc = (
+                    f"Acțiunea `{sym}` a atins Stop-ul dinamic (`${old_s:.2f}`).\n\n"
+                    f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
+                    f"💰 *Rezultat Realizat:* *${locked:+,.2f}*"
+                )
+            elif "TP1_SCALE_OUT" in act:
+                title = "🎯 *TP1 ATINS (50% PROFIT MARCAT + FREE-ROLL)*"
+                desc = (
+                    f"Acțiunea `{sym}` a atins prima țintă de profit!\n\n"
+                    f"• Preț Curent: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
+                    f"• Profit Marcat pe Lotul 1 (50%): *${locked:+,.2f}*\n"
+                    f"🛡️ *Stop-Loss-ul pentru restul de 50% a fost mutat la Breakeven (${new_s:.2f})!*"
+                )
+            elif "TP2_RUNNER_EXIT" in act:
+                title = "🚀 *TP2 ATINS (100% POZIȚIE ÎNCHISĂ LA ȚINTA FINALĂ)*"
+                desc = (
+                    f"Runner-ul pe `{sym}` a atins ținta majoră TP2!\n\n"
+                    f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
+                    f"💰 *Profit Realizat Lot 2:* *${locked:+,.2f}*"
+                )
+            elif act == "TRAILING_STOP":
                 title = "📈 *TRAILING STOP ACTIVAT (PROFIT SECURIZAT)*"
                 desc = (
                     f"Acțiunea `{sym}` este în creștere puternică (*{plpc:+.2f}%*).\n\n"

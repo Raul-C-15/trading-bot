@@ -225,10 +225,13 @@ def run_automated_scan(trader: AlpacaTrader):
 
 def run_premarket_briefing(trader: AlpacaTrader):
     """
-    Briefing Pre-Market (16:15 RO / 9:15 ET):
+    Briefing Pre-Market / Deschidere Bursa SUA:
     Pregateste Watchlist-ul zilei, verifica modelul ML, verifica apropierea de Earnings
     pentru pozitiile active si trimite planul zilei pe Telegram.
     """
+    global ALERTED_TODAY
+    state = load_telegram_state()
+    ALERTED_TODAY = state.get("alerted_today", ALERTED_TODAY)
     today_str = datetime.now().strftime("%Y-%m-%d")
     if ALERTED_TODAY.get("_PREMARKET_SENT_") == today_str:
         return
@@ -291,6 +294,9 @@ def run_eod_report(trader: AlpacaTrader):
     Raport de Inchidere Bursa (End-of-Day, ~23:05 RO / 16:05 ET):
     Sincronizeaza tranzactiile inchise, afiseaza P&L-ul zilei si starea pozitiilor peste noapte.
     """
+    global ALERTED_TODAY
+    state = load_telegram_state()
+    ALERTED_TODAY = state.get("alerted_today", ALERTED_TODAY)
     today_str = datetime.now().strftime("%Y-%m-%d")
     if ALERTED_TODAY.get("_EOD_SENT_") == today_str:
         return
@@ -436,31 +442,34 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 continue
 
             if not clock.is_open:
-                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni (16:00 ET / 23:00 RO) -> Trimitem Raport EOD!
-                if was_open_during_session or (market_time.hour == 16 and market_time.minute <= 30):
+                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD!
+                if was_open_during_session or market_time.hour in (16, 17):
                     run_eod_report(trader)
-                    print("🔔 Sesiunea de azi s-a incheiat dupa Raportul EOD.")
+                    print("🔔 Sesiunea de azi s-a incheiat dupa Raportul EOD. Ascultare Telegram inca 30s...")
+                    time.sleep(30)
                     break
 
-                # Cazul 2: Suntem in Pre-Market (inainte de 9:30 ET / 16:30 RO, cu cel mult 45 min inainte de deschidere)
+                # Cazul 2: Suntem in Pre-Market (cu pana la 90 min inainte de deschidere, de la 15:00 RO / 08:00 ET)
                 seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
-                if 0 < seconds_to_open <= 2700:
-                    run_premarket_briefing(trader)
+                if 0 < seconds_to_open <= 5400:
+                    if seconds_to_open <= 2700:
+                        run_premarket_briefing(trader)
                     wait_sec = min(60, int(seconds_to_open))
-                    print(f"⏳ Pre-Market activ: Bursa se deschide in {int(seconds_to_open // 60)} min...")
+                    print(f"⏳ Pre-Market activ: Bursa se deschide in {int(seconds_to_open // 60)} min (Telegram Live activ)...")
                     time.sleep(wait_sec)
                     continue
 
                 # Cazul 3: Bursa este inchisa (sarbatoare sau in afara programului)
                 print(f"🌙 Bursa SUA este INCHISA. Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                time.sleep(10)
                 break
 
             # Piata este DESCHISA!
             was_open_during_session = True
 
-            # Daca nu s-a trimis inca briefing-ul azi, il marcam / trimitem
+            # Daca nu s-a trimis inca briefing-ul azi (chiar daca GitHub Actions a pornit cu intarziere), il trimitem imediat!
             today_str = datetime.now().strftime("%Y-%m-%d")
-            if ALERTED_TODAY.get("_PREMARKET_SENT_") != today_str and market_time.hour == 9 and market_time.minute < 45:
+            if ALERTED_TODAY.get("_PREMARKET_SENT_") != today_str:
                 run_premarket_briefing(trader)
 
             # Buffer de protectie primele 15 minute (9:30 - 9:45 ET / 16:30 - 16:45 RO)

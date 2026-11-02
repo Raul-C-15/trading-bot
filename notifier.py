@@ -103,9 +103,15 @@ def send_telegram_message(text: str, reply_markup: dict = None) -> dict:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("result", {})
-        else:
-            print(f"⚠️ Eroare Telegram API ({response.status_code}): {response.text}")
-            return {}
+        # Fallback fara parse_mode daca un caracter special (_, *, [) a blocat parserul Markdown
+        payload_plain = {"chat_id": config.TELEGRAM_CHAT_ID, "text": text}
+        if reply_markup:
+            payload_plain["reply_markup"] = reply_markup
+        retry = requests.post(url, json=payload_plain, timeout=10)
+        if retry.status_code == 200:
+            return retry.json().get("result", {})
+        print(f"⚠️ Eroare Telegram API ({response.status_code}): {response.text}")
+        return {}
     except Exception as e:
         print(f"⚠️ Eroare trimitere notificare Telegram: {e}")
         return {}

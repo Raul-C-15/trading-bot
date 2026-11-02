@@ -308,10 +308,10 @@ class TelegramListener:
                 total_pl += pl
 
                 st = pos_state.get(sym, {})
-                sl = st.get("current_stop", st.get("initial_stop", 0.0))
-                tp1 = st.get("tp1_price", 0.0)
-                tp2 = st.get("tp2_price", 0.0)
-                be = "🛡️ Free-Roll (BE)" if st.get("breakeven_moved") else "⚡ Risc Activ"
+                sl = st.get("last_stop_price", st.get("current_stop", st.get("initial_stop", 0.0)))
+                tp1 = st.get("tp1", st.get("tp1_price", 0.0))
+                tp2 = st.get("tp2", st.get("tp2_price", 0.0))
+                be = "🛡️ Free-Roll (BE)" if (st.get("breakeven_active") or st.get("breakeven_moved")) else "⚡ Risc Activ"
 
                 qty_str = f"{int(qty)}" if float(qty).is_integer() else f"{qty:.4f}".rstrip("0").rstrip(".")
                 icon = "🟢" if pl >= 0 else "🔴"
