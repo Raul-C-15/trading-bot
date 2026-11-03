@@ -1,7 +1,8 @@
 {
   "pending_signals": {},
   "alerted_today": {
-    "_PREMARKET_SENT_": "2026-11-03"
+    "_PREMARKET_SENT_": "2026-11-03",
+    "_EOD_SENT_": "2026-11-03"
   },
   "last_update_id": 935411365,
   "auto_trade": true
