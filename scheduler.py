@@ -428,8 +428,25 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     session_start = time.time()
     max_seconds = max_minutes * 60
     was_open_during_session = False
+    standby_logged = False
 
     print(f"🚀 Sesiune Cloud Continua pornita (durata maxima: {max_minutes} min | Scanare: {config.SCAN_INTERVAL_MINUTES} min | SL/TP check: 60s)")
+
+    # Daca sesiunea a fost pornita manual din GitHub Actions ("Run workflow"), trimitem confirmare instanta pe Telegram!
+    if os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        try:
+            summary = trader.get_portfolio_summary()
+            clock_info = "🟢 DESCHISĂ" if (trader.is_connected and trader.client and trader.client.get_clock().is_open) else "🌙 ÎNCHISĂ (Deschide la 16:30 RO — Mod Standby Activ)"
+            send_telegram_message(
+                f"🟢 *Botul a pornit în Cloud (Sesiune Activă)!*\n\n"
+                f"🏛️ *Bursa SUA:* {clock_info}\n"
+                f"💰 *Portofoliu:* `${summary['portfolio_value']:,.2f}` (Cash: `${summary['cash']:,.2f}`)\n"
+                f"⚙️ *Auto-Trade:* `{'ACTIVAT (ON)' if config.AUTO_TRADE else 'DEZACTIVAT (Confirmare 1-Click)'}`\n\n"
+                f"💬 _Ascultătorul Telegram este LIVE! Poți folosi oricând comenzile `/status`, `/positions`, `/watchlist`, `/scan` sau butoanele de mai jos:_",
+                reply_markup=QUICK_MENU_MARKUP,
+            )
+        except Exception:
+            pass
 
     while (time.time() - session_start) < max_seconds:
         if trader.is_connected and trader.client:
@@ -445,26 +462,28 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD!
                 if was_open_during_session or market_time.hour in (16, 17):
                     run_eod_report(trader)
-                    print("🔔 Sesiunea de azi s-a incheiat dupa Raportul EOD. Ascultare Telegram inca 30s...")
-                    time.sleep(30)
-                    break
 
-                # Cazul 2: Suntem in Pre-Market (cu pana la 90 min inainte de deschidere, de la 15:00 RO / 08:00 ET)
+                # Cazul 2: Suntem in Pre-Market (cu pana la 45 min inainte de deschidere, de la 15:45 RO / 08:45 ET)
                 seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
-                if 0 < seconds_to_open <= 5400:
-                    if seconds_to_open <= 2700:
-                        run_premarket_briefing(trader)
+                if 0 < seconds_to_open <= 2700:
+                    run_premarket_briefing(trader)
                     wait_sec = min(60, int(seconds_to_open))
                     print(f"⏳ Pre-Market activ: Bursa se deschide in {int(seconds_to_open // 60)} min (Telegram Live activ)...")
                     time.sleep(wait_sec)
                     continue
 
-                # Cazul 3: Bursa este inchisa (sarbatoare sau in afara programului)
-                print(f"🌙 Bursa SUA este INCHISA. Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-                time.sleep(10)
-                break
+                # Cazul 3: Bursa este inchisa -> Rulam in MOD STANDBY & TELEGRAM LIVE (nu mai inchidem sesiunea!)
+                if not standby_logged:
+                    print(
+                        f"🌙 Bursa SUA este INCHISA (Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}). "
+                        f"Rulare in mod STANDBY + Ascultare Telegram Live..."
+                    )
+                    standby_logged = True
+                time.sleep(60)
+                continue
 
             # Piata este DESCHISA!
+            standby_logged = False
             was_open_during_session = True
 
             # Daca nu s-a trimis inca briefing-ul azi (chiar daca GitHub Actions a pornit cu intarziere), il trimitem imediat!
