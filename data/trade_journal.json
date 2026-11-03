@@ -110,5 +110,33 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-10-22 13:36:44"
+    },
+    {
+        "id": "TR_0009",
+        "alpaca_order_id": "4e74da50-aa53-4a94-a94b-34b1a39c49fd",
+        "ticker": "CRWD",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 257.72,
+        "exit_price": 245.19,
+        "shares": 0.8045,
+        "pnl": -10.08,
+        "pnl_pct": -4.86,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-02 18:59:30"
+    },
+    {
+        "id": "TR_0010",
+        "alpaca_order_id": "5eaf883e-7e57-40f2-bfc0-a0135a44a057",
+        "ticker": "PANW",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 375.17,
+        "exit_price": 360.53,
+        "shares": 0.6669,
+        "pnl": -9.76,
+        "pnl_pct": -3.9,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-02 18:58:28"
     }
 ]
