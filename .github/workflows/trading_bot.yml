@@ -2,10 +2,10 @@ name: 🤖 Swing Trading Bot (Full-Session Cloud + Weekend)
 
 on:
   schedule:
-    # 1. Luni - Vineri (Arhitectura Full-Session + Standby Telegram Live toata ziua):
-    # Porneste de dimineata in mod Standby (Telegram Live) si trece automat in Live Trading la 16:30 RO pana la 23:05 RO.
+    # 1. Luni - Vineri (Pre-Market 15:40 RO -> Inchidere Bursa + Raport EOD 23:05 RO):
+    # Porneste in Pre-Market (13:40 UTC / 15:40 RO) si ruleaza in 2 sesiuni continue pana la 21:05 UTC (23:05 RO).
     # Cu 'concurrency' activ, daca o sesiune ruleaza deja, nu este intrerupta, iar urmatoarea preia stafeta fara goluri!
-    - cron: '10,40 6-22 * * 1-5'
+    - cron: '10,40 13-21 * * 1-5'
 
     # 2. Weekend (Duminica la 16:00 UTC / 18:00-19:00 RO):
     # Reantreneaza modelul ML XGBoost, actualizeaza Watchlist-ul de lideri si trimite Raportul pe Telegram

@@ -462,17 +462,31 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD!
                 if was_open_during_session or market_time.hour in (16, 17):
                     run_eod_report(trader)
+                    if os.getenv("GITHUB_ACTIONS") and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                        print("🔔 Sesiunea Cloud de azi s-a incheiat dupa Raportul EOD. Oprire container pentru economisire minute.")
+                        time.sleep(15)
+                        break
 
-                # Cazul 2: Suntem in Pre-Market (cu pana la 45 min inainte de deschidere, de la 15:45 RO / 08:45 ET)
+                # Cazul 2: Suntem in Pre-Market (cu pana la 60 min inainte de deschidere, de la 15:30 RO / 08:30 ET)
                 seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
-                if 0 < seconds_to_open <= 2700:
-                    run_premarket_briefing(trader)
+                if 0 < seconds_to_open <= 3600:
+                    if seconds_to_open <= 2700:
+                        run_premarket_briefing(trader)
                     wait_sec = min(60, int(seconds_to_open))
                     print(f"⏳ Pre-Market activ: Bursa se deschide in {int(seconds_to_open // 60)} min (Telegram Live activ)...")
                     time.sleep(wait_sec)
                     continue
 
-                # Cazul 3: Bursa este inchisa -> Rulam in MOD STANDBY & TELEGRAM LIVE (nu mai inchidem sesiunea!)
+                # Cazul 3: Bursa este inchisa (peste >60 min pana la deschidere)
+                # In GitHub Actions (cron automat), nu blocam minutele peste noapte; local sau la 'Run workflow' manual ramanem in Standby!
+                if os.getenv("GITHUB_ACTIONS") and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                    print(
+                        f"🌙 Bursa SUA este INCHISA (Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}). "
+                        f"Ascultare rapida Telegram 15s, apoi inchidere sesiune cron..."
+                    )
+                    time.sleep(15)
+                    break
+
                 if not standby_logged:
                     print(
                         f"🌙 Bursa SUA este INCHISA (Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}). "
