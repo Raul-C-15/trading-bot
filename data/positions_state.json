@@ -20,5 +20,50 @@
         "breakeven_active": false,
         "last_stop_price": 414.55,
         "updated_at": "2026-10-29 17:50:44"
+    },
+    "AAPL": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 343.08,
+        "initial_stop": 325.33,
+        "initial_risk": 17.75,
+        "tp1": 369.7,
+        "tp2": 396.33,
+        "initial_qty": 0.5384,
+        "peak_price": 343.08,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 325.33,
+        "updated_at": "2026-11-06 15:13:03"
+    },
+    "MSFT": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 532.99,
+        "initial_stop": 507.82,
+        "initial_risk": 25.17,
+        "tp1": 570.75,
+        "tp2": 608.5,
+        "initial_qty": 0.3797,
+        "peak_price": 532.99,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 507.82,
+        "updated_at": "2026-11-06 15:13:04"
+    },
+    "VRTX": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 536.77,
+        "initial_stop": 521.75,
+        "initial_risk": 15.02,
+        "tp1": 559.3,
+        "tp2": 581.84,
+        "initial_qty": 0.4565,
+        "peak_price": 536.77,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 521.75,
+        "updated_at": "2026-11-06 15:13:06"
     }
 }
