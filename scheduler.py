@@ -586,10 +586,6 @@ def main():
     print(f"   Interval scanare: {config.SCAN_INTERVAL_MINUTES} minute")
     print("=" * 65)
 
-    # Pornire listener butoane si comenzi interactive Telegram in fundal
-    listener = TelegramListener(trader)
-    listener.start()
-
     mode_text = "Tranzacționare automată activă" if config.AUTO_TRADE else "Mod Alerte + Confirmare 1-Click"
     send_telegram_message(
         f"🟢 *Maur's Trading Bot a pornit în mod AUTONOM!*\n\n"

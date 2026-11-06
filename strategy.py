@@ -376,7 +376,9 @@ def _compute_composite_score(signal: TradeSignal) -> float:
     ml_part = (signal.ml_confidence if signal.ml_confidence > 0 else 0.55) * 60.0
     rs_clamped = max(-10.0, min(40.0, signal.rs_score))
     rs_part = ((rs_clamped + 10.0) / 50.0) * 40.0
-    news_bonus = max(-5.0, min(5.0, getattr(signal, "news_score", 0.0) * 2.5))
+    raw_news_score = getattr(signal, "news_score", 0.0)
+    news_val = float(raw_news_score) if isinstance(raw_news_score, (int, float)) else 0.0
+    news_bonus = max(-5.0, min(5.0, news_val * 2.5))
     return round(max(0.0, min(100.0, ml_part + rs_part + news_bonus)), 2)
 
 
@@ -566,7 +568,7 @@ def analyze_ticker(
         # 3. Verificare Catalizatori Știri & Sentiment Live (Alpaca News API)
         try:
             from data_loader import check_news_sentiment
-            is_blocked, news_label, news_headline, news_score = check_news_sentiment(ticker)
+            is_blocked, news_score, news_label, news_headline = check_news_sentiment(ticker)
             candidate.news_sentiment = news_label
             candidate.news_headline = news_headline
             candidate.news_score = news_score
