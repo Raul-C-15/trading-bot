@@ -44,12 +44,12 @@
         "tp1": 570.75,
         "tp2": 608.5,
         "initial_qty": 0.3797,
-        "peak_price": 544.275,
+        "peak_price": 544.77,
         "tp1_hit": false,
-        "breakeven_active": false,
+        "breakeven_active": true,
         "fractional_managed": true,
-        "last_stop_price": 507.82,
-        "updated_at": "2026-11-06 15:13:04"
+        "last_stop_price": 534.6,
+        "updated_at": "2026-11-09 17:28:55"
     },
     "VRTX": {
         "setup_type": "PULLBACK_EMA20",
