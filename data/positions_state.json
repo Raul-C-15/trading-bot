@@ -44,7 +44,7 @@
         "tp1": 570.75,
         "tp2": 608.5,
         "initial_qty": 0.3797,
-        "peak_price": 542.61,
+        "peak_price": 542.7456,
         "tp1_hit": false,
         "breakeven_active": false,
         "fractional_managed": true,
@@ -65,5 +65,20 @@
         "fractional_managed": true,
         "last_stop_price": 538.5,
         "updated_at": "2026-11-06 18:33:37"
+    },
+    "JPM": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 340.64,
+        "initial_stop": 331.1,
+        "initial_risk": 9.54,
+        "tp1": 354.95,
+        "tp2": 369.26,
+        "initial_qty": 0.7269,
+        "peak_price": 340.64,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 331.1,
+        "updated_at": "2026-11-09 16:03:58"
     }
 }
