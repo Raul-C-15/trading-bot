@@ -2,14 +2,23 @@ name: 🤖 Swing Trading Bot (Full-Session Cloud + Weekend)
 
 on:
   schedule:
-    # 1. Luni - Vineri (Pre-Market 15:40 RO -> Inchidere Bursa + Raport EOD 23:05 RO):
-    # Porneste in Pre-Market (13:40 UTC / 15:40 RO) si ruleaza in 2 sesiuni continue pana la 21:05 UTC (23:05 RO).
-    # Cu 'concurrency' activ, daca o sesiune ruleaza deja, nu este intrerupta, iar urmatoarea preia stafeta fara goluri!
-    - cron: '10,40 13-21 * * 1-5'
+    # 1. Luni - Vineri (Pornire devreme in ziua de bursa -> Standby Pre-Market -> Live Trading 16:30 - 23:05 RO):
+    # Pornirea de la 05:10 UTC compenseaza intarzierea de 4-8h a cozii GitHub Actions (astfel incat sesiunea este deja activa la 16:30 RO).
+    # Odata pornita o sesiune in ziua de bursa, joburile inlantuite (session-1 -> session-2 -> session-3) o mentin vie pana la 23:05 RO!
+    - cron: '10,40 5-21 * * 1-5'
+    - cron: '25,55 11-20 * * 1-5'
 
-    # 2. Weekend (Duminica la 16:00 UTC / 18:00-19:00 RO):
+    # 2. Weekend (Duminica):
     # Reantreneaza modelul ML XGBoost, actualizeaza Watchlist-ul de lideri si trimite Raportul pe Telegram
-    - cron: '0 16 * * 0'
+    - cron: '0 14 * * 0'
+
+  # Porneste automat si cand se actualizeaza configuratia scheduler-ului sau workflow-ului
+  push:
+    branches:
+      - main
+    paths:
+      - 'scheduler.py'
+      - '.github/workflows/trading_bot.yml'
 
   # Permite rularea manuala oricand cu 1 click din GitHub (de pe telefon sau PC)
   workflow_dispatch:
@@ -34,13 +43,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  run-bot:
+  session-1:
+    name: 🚀 Sesiune Cloud (Veriga 1 - pana la 5.5h)
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 355
+    outputs:
+      continue_day: ${{ steps.bot.outputs.continue_day }}
 
     steps:
       - name: 📥 Descarcare cod si stare curenta (Checkout)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🐍 Configurare Python 3.11 + Cache librarii
         uses: actions/setup-python@v5
@@ -54,6 +68,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: 🚀 Executie Trading Bot (Full-Session / Comenzi Live Telegram)
+        id: bot
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -62,22 +77,135 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           AUTO_TRADE: ${{ secrets.AUTO_TRADE || 'False' }}
         run: |
-          if [ "${{ github.event.schedule }}" = "0 16 * * 0" ] || [ "${{ github.event.inputs.mode }}" = "weekend_maintenance" ]; then
+          if [ "${{ github.event.schedule }}" = "0 14 * * 0" ] || [ "${{ github.event.inputs.mode }}" = "weekend_maintenance" ]; then
             echo "🛠️ Rulare Mentenanta de Weekend & Pregatire Saptamana Noua..."
             python scheduler.py --weekend
+            echo "continue_day=false" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event.inputs.mode }}" = "premarket_briefing" ]; then
             echo "🌅 Trimitere Briefing Pre-Market..."
             python scheduler.py --premarket
+            echo "continue_day=false" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event.inputs.mode }}" = "eod_report" ]; then
             echo "🔔 Trimitere Raport Inchidere Bursa (End-of-Day)..."
             python scheduler.py --eod
+            echo "continue_day=false" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event.inputs.mode }}" = "scan_force" ]; then
             echo "🔎 Rulare Scanare Fortata + 90s Ascultare Telegram..."
             python scheduler.py --session --force
+            echo "continue_day=false" >> "$GITHUB_OUTPUT"
           else
-            echo "📈 Rulare Sesiune Continua (~3.5h, scan la 15m, SL/TP la 60s, Telegram Live)..."
-            python scheduler.py --session --max-minutes 215
+            echo "📈 Rulare Sesiune Continua (~5.5h, scan la 15m, SL/TP la 60s, Telegram Live)..."
+            python scheduler.py --session --max-minutes 330
           fi
+
+      - name: 💾 Salvare stare persistenta (Jurnal, Pozitii, ML, Watchlist)
+        if: always()
+        run: |
+          git config user.name "Trading Bot Cloud"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/*.json data/*.pkl 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 Auto-sync bot state ($(date -u +'%Y-%m-%d %H:%M UTC')) [skip ci]"
+            git pull --rebase origin main || true
+            git push
+          else
+            echo "ℹ️ Nicio modificare noua in fisierele de stare."
+          fi
+
+  session-2:
+    name: 🔄 Continuitate Sesiune Cloud (Veriga 2 - pana la 5.5h)
+    needs: session-1
+    if: always() && needs.session-1.outputs.continue_day == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    outputs:
+      continue_day: ${{ steps.bot2.outputs.continue_day }}
+
+    steps:
+      - name: 📥 Descarcare cod si stare actualizata (Checkout)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 🐍 Configurare Python 3.11 + Cache librarii
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Instalare dependente
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🚀 Continuare Automata Sesiune Trading Bot (Veriga 2)
+        id: bot2
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER || 'True' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          AUTO_TRADE: ${{ secrets.AUTO_TRADE || 'False' }}
+          IS_CONTINUATION_SESSION: 'true'
+        run: |
+          git pull --rebase origin main || true
+          echo "📈 Continuare Sesiune Cloud fara intrerupere (Veriga 2 - pana la Inchiderea Bursei 23:05 RO)..."
+          python scheduler.py --session --max-minutes 330
+
+      - name: 💾 Salvare stare persistenta (Jurnal, Pozitii, ML, Watchlist)
+        if: always()
+        run: |
+          git config user.name "Trading Bot Cloud"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/*.json data/*.pkl 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "🤖 Auto-sync bot state ($(date -u +'%Y-%m-%d %H:%M UTC')) [skip ci]"
+            git pull --rebase origin main || true
+            git push
+          else
+            echo "ℹ️ Nicio modificare noua in fisierele de stare."
+          fi
+
+  session-3:
+    name: 🏁 Finalizare Zi Tranzactionare + Raport EOD (Veriga 3)
+    needs: session-2
+    if: always() && needs.session-2.outputs.continue_day == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+
+    steps:
+      - name: 📥 Descarcare cod si stare actualizata (Checkout)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 🐍 Configurare Python 3.11 + Cache librarii
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Instalare dependente
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🚀 Continuare Automata Sesiune Trading Bot (Veriga 3 -> EOD)
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER || 'True' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          AUTO_TRADE: ${{ secrets.AUTO_TRADE || 'False' }}
+          IS_CONTINUATION_SESSION: 'true'
+        run: |
+          git pull --rebase origin main || true
+          echo "📈 Continuare Sesiune Cloud pana la Raportul EOD (23:05 RO)..."
+          python scheduler.py --session --max-minutes 330
 
       - name: 💾 Salvare stare persistenta (Jurnal, Pozitii, ML, Watchlist)
         if: always()

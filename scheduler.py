@@ -404,11 +404,27 @@ def run_weekend_maintenance(trader: AlpacaTrader):
     print("✅ Mentenanța de weekend s-a încheiat cu succes!")
 
 
-def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: int = 215):
+def _set_github_continue_output(should_continue: bool):
     """
-    Arhitectura Full-Session (fara intreruperi timp de ~3.5 ore per sesiune):
-    - Sesiunea 1 (16:15 - 19:45 RO): Pre-Market Briefing -> Scanare la 15 min + SL/TP la 60s
-    - Sesiunea 2 (19:45 - 23:05 RO): Scanare la 15 min + Power Hour (22:00-23:00) -> Raport EOD la 23:00
+    Scrie in GITHUB_OUTPUT daca sesiunea curenta trebuie continuata automat
+    de urmatorul job din lant (session-1 -> session-2 -> session-3) fara a depinde de cron.
+    """
+    gh_out = os.getenv("GITHUB_OUTPUT")
+    if gh_out:
+        try:
+            with open(gh_out, "a", encoding="utf-8") as f:
+                val = "true" if should_continue else "false"
+                f.write(f"continue_day={val}\n")
+        except Exception:
+            pass
+
+
+def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: int = 330):
+    """
+    Arhitectura Full-Session Chained (acopera toata ziua de tranzactionare fara goluri):
+    - Rulare continua pana la 330 min (5.5h) per job, inlantuita automat (session-1 -> session-2 -> session-3)
+    - Daca porneste inainte de deschidere in zi de bursa, ramane in Standby -> Pre-Market (15:45 RO) -> Live Open (16:30 RO)
+    - Scanare la 15 min + SL/TP la 60s + Power Hour (22:00-23:00 RO) -> Raport EOD la 23:00 RO
     - Raspunde INSTANT la comenzile Telegram (/status, /positions, /scan, /watchlist) si butoane!
     """
     listener = TelegramListener(trader)
@@ -421,6 +437,7 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
         time.sleep(90)
         listener.stop()
         sync_state_to_git()
+        _set_github_continue_output(False)
         return
 
     # Pornim ascultatorul Telegram in timp real pe toata durata sesiunii
@@ -430,10 +447,10 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     was_open_during_session = False
     standby_logged = False
 
-    print(f"🚀 Sesiune Cloud Continua pornita (durata maxima: {max_minutes} min | Scanare: {config.SCAN_INTERVAL_MINUTES} min | SL/TP check: 60s)")
+    print(f"🚀 Sesiune Cloud Continua pornita (durata maxima job: {max_minutes} min | Scanare: {config.SCAN_INTERVAL_MINUTES} min | SL/TP check: 60s)")
 
-    # Daca sesiunea a fost pornita manual din GitHub Actions ("Run workflow"), trimitem confirmare instanta pe Telegram!
-    if os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch":
+    # Daca sesiunea a fost pornita manual ("Run workflow") sau prin push si este prima veriga din lant, trimitem confirmare pe Telegram!
+    if os.getenv("GITHUB_EVENT_NAME") in ("workflow_dispatch", "push") and os.getenv("IS_CONTINUATION_SESSION") != "true":
         try:
             summary = trader.get_portfolio_summary()
             clock_info = "🟢 DESCHISĂ" if (trader.is_connected and trader.client and trader.client.get_clock().is_open) else "🌙 ÎNCHISĂ (Deschide la 16:30 RO — Mod Standby Activ)"
@@ -459,16 +476,21 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 continue
 
             if not clock.is_open:
-                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD!
-                if was_open_during_session or market_time.hour in (16, 17):
-                    run_eod_report(trader)
-                    if os.getenv("GITHUB_ACTIONS") and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
-                        print("🔔 Sesiunea Cloud de azi s-a incheiat dupa Raportul EOD. Oprire container pentru economisire minute.")
-                        time.sleep(15)
-                        break
-
-                # Cazul 2: Suntem in Pre-Market (cu pana la 60 min inainte de deschidere, de la 15:30 RO / 08:30 ET)
                 seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
+                opens_today_et = (clock.next_open.date() == market_time.date())
+
+                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD si oprim!
+                if was_open_during_session or (not opens_today_et and market_time.hour in (16, 17, 18, 19, 20)):
+                    run_eod_report(trader)
+                    if os.getenv("GITHUB_ACTIONS"):
+                        print("🔔 Sesiunea Cloud de azi s-a incheiat dupa Raportul EOD. Oprire container.")
+                        time.sleep(15)
+                        listener.stop()
+                        sync_state_to_git()
+                        _set_github_continue_output(False)
+                        return
+
+                # Cazul 2: Suntem in Pre-Market apropiat (cu pana la 60 min inainte de deschidere, de la 15:30 RO / 08:30 ET)
                 if 0 < seconds_to_open <= 3600:
                     if seconds_to_open <= 2700:
                         run_premarket_briefing(trader)
@@ -477,15 +499,31 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                     time.sleep(wait_sec)
                     continue
 
-                # Cazul 3: Bursa este inchisa (peste >60 min pana la deschidere)
-                # In GitHub Actions (cron automat), nu blocam minutele peste noapte; local sau la 'Run workflow' manual ramanem in Standby!
+                # Cazul 3: Este zi de tranzactionare SUA (bursa se deschide AZI, in mai putin de 10 ore)
+                # NU inchidem sesiunea! Ramanem in Standby cu Telegram Live si intram automat in piata la 16:30 RO!
+                if opens_today_et or (0 < seconds_to_open <= 36000):
+                    if not standby_logged:
+                        hrs = int(seconds_to_open // 3600)
+                        mins = int((seconds_to_open % 3600) // 60)
+                        print(
+                            f"☀️ Zi de tranzactionare SUA: Bursa se deschide azi ({clock.next_open.strftime('%H:%M %Z')}, "
+                            f"peste {hrs}h {mins}m). Rulare in mod STANDBY + Telegram Live pana la deschidere..."
+                        )
+                        standby_logged = True
+                    time.sleep(60)
+                    continue
+
+                # Cazul 4: Bursa este inchisa pentru tot restul zilei (noaptea dupa 23:00 RO sau in Weekend/Sarbatori)
                 if os.getenv("GITHUB_ACTIONS") and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
                     print(
                         f"🌙 Bursa SUA este INCHISA (Urmatoarea deschidere: {clock.next_open.strftime('%Y-%m-%d %H:%M:%S %Z')}). "
-                        f"Ascultare rapida Telegram 15s, apoi inchidere sesiune cron..."
+                        f"Ascultare rapida Telegram 15s, apoi inchidere sesiune..."
                     )
                     time.sleep(15)
-                    break
+                    listener.stop()
+                    sync_state_to_git()
+                    _set_github_continue_output(False)
+                    return
 
                 if not standby_logged:
                     print(
@@ -535,6 +573,7 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                         run_eod_report(trader)
                         listener.stop()
                         sync_state_to_git()
+                        _set_github_continue_output(False)
                         return
 
                     from position_manager import run_position_manager
@@ -547,19 +586,33 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 except Exception:
                     pass
 
+    # Durata maxima a jobului curent (max_minutes) a expirat -> verificam daca predam stafeta jobului urmator din lant!
+    should_continue = False
+    if trader.is_connected and trader.client:
+        try:
+            clock = trader.client.get_clock()
+            sec_to_open = (clock.next_open - clock.timestamp).total_seconds()
+            if clock.is_open or clock.next_open.date() == clock.timestamp.date() or (0 < sec_to_open <= 36000):
+                should_continue = True
+        except Exception:
+            should_continue = True
+
     listener.stop()
     sync_state_to_git()
+    _set_github_continue_output(should_continue)
+    if should_continue:
+        print("🔄 Timpul jobului curent s-a incheiat cu piata activa/in asteptare. Predare stafeta automata catre urmatoarea sesiune...")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Scheduler Autonom Trading Bot")
-    parser.add_argument("--session", action="store_true", help="Ruleaza o sesiune Cloud continua (~3.5h, scan la 15m, SL/TP la 60s)")
+    parser.add_argument("--session", action="store_true", help="Ruleaza o sesiune Cloud continua (~5.5h per veriga, scan la 15m, SL/TP la 60s)")
     parser.add_argument("--once", action="store_true", help="Alias pentru sesiunea Cloud")
     parser.add_argument("--weekend", action="store_true", help="Ruleaza mentenanta si raportul de weekend")
     parser.add_argument("--premarket", action="store_true", help="Trimite Briefing-ul Pre-Market")
     parser.add_argument("--eod", action="store_true", help="Trimite Raportul de Inchidere Bursa (End-of-Day)")
     parser.add_argument("--force", action="store_true", help="Ruleaza o scanare de test chiar daca bursa este inchisa")
-    parser.add_argument("--max-minutes", type=int, default=215, help="Durata maxima a sesiunii Cloud in minute (default: 215)")
+    parser.add_argument("--max-minutes", type=int, default=330, help="Durata maxima a sesiunii Cloud in minute (default: 330)")
     args = parser.parse_args()
 
     trader = AlpacaTrader()
