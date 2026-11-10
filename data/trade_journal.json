@@ -138,5 +138,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-02 18:58:28"
+    },
+    {
+        "id": "TR_0011",
+        "alpaca_order_id": "75a9f062-18b0-4ba4-b507-dfe8d9481679",
+        "ticker": "MSFT",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 533.8,
+        "exit_price": 533.99,
+        "shares": 0.3797,
+        "pnl": 0.07,
+        "pnl_pct": 0.04,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-10 17:26:42"
     }
 ]
