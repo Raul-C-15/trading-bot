@@ -36,21 +36,6 @@
         "last_stop_price": 344.16,
         "updated_at": "2026-11-09 15:29:22"
     },
-    "VRTX": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 536.77,
-        "initial_stop": 521.75,
-        "initial_risk": 15.02,
-        "tp1": 559.3,
-        "tp2": 581.84,
-        "initial_qty": 0.4565,
-        "peak_price": 553.215,
-        "tp1_hit": false,
-        "breakeven_active": true,
-        "fractional_managed": true,
-        "last_stop_price": 538.5,
-        "updated_at": "2026-11-06 18:33:37"
-    },
     "JPM": {
         "setup_type": "PULLBACK_EMA20",
         "entry_price": 340.64,
@@ -74,7 +59,7 @@
         "tp1": 637.45,
         "tp2": 682.81,
         "initial_qty": 0.1658,
-        "peak_price": 605.8071,
+        "peak_price": 606.35,
         "tp1_hit": false,
         "breakeven_active": true,
         "fractional_managed": true,
