@@ -80,5 +80,20 @@
         "fractional_managed": true,
         "last_stop_price": 437.61,
         "updated_at": "2026-11-11 14:45:33"
+    },
+    "AMD": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 551.4,
+        "initial_stop": 521.07,
+        "initial_risk": 30.33,
+        "tp1": 596.89,
+        "tp2": 642.39,
+        "initial_qty": 0.3172,
+        "peak_price": 551.4,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 521.07,
+        "updated_at": "2026-11-11 16:03:26"
     }
 }
