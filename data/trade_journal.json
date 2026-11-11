@@ -152,5 +152,19 @@
         "result": "WIN",
         "exit_type": "TAKE_PROFIT",
         "closed_at": "2026-11-10 17:26:42"
+    },
+    {
+        "id": "TR_0012",
+        "alpaca_order_id": "6d9173a2-a6b1-481c-9b44-08f22435a718",
+        "ticker": "VRTX",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 537.69,
+        "exit_price": 538.41,
+        "shares": 0.4565,
+        "pnl": 0.33,
+        "pnl_pct": 0.13,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-11 15:04:11"
     }
 ]
