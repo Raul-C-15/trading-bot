@@ -88,7 +88,10 @@ def run_automated_scan(trader: AlpacaTrader):
         from data_loader import get_smart_hybrid_watchlist
         wl, wl_meta = get_smart_hybrid_watchlist(force_refresh=False)
         if not wl_meta.get("from_cache"):
-            print(f"[{now_str}] 🌟 Watchlist Smart Hybrid actualizat pentru azi ({len(wl)} lideri): {', '.join(wl[:8])}...")
+            hot_sec = ", ".join(wl_meta.get("hot_sectors", [])[:3])
+            print(f"[{now_str}] 🌟 Watchlist Sector Rotation actualizat ({len(wl)} lideri AI/Tech): {', '.join(wl[:8])}...")
+            if hot_sec:
+                print(f"[{now_str}] 🔥 Sectoare Fierbinti (Money Flow): {hot_sec}")
     except Exception as e:
         print(f"[{now_str}] ⚠️ Eroare Auto-Watchlist: {e}")
 
@@ -133,7 +136,6 @@ def run_automated_scan(trader: AlpacaTrader):
     for p in open_positions:
         sec = config.get_ticker_sector(p["symbol"])
         sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
-    max_per_sector = getattr(config, "MAX_POSITIONS_PER_SECTOR", 2)
 
     buy_signals = []
 
@@ -159,25 +161,26 @@ def run_automated_scan(trader: AlpacaTrader):
         except Exception as e:
             print(f"[{now_str}] Eroare evaluare {ticker}: {e}")
 
-    # 3. Sortam semnalele descrescator dupa Scorul Compozit (ML Confidence + RS vs SPY + News)
+    # 3. Sortam semnalele descrescator dupa Scorul Compozit de Atac (Sector Alpha + ML + RS + News)
     if buy_signals:
         buy_signals.sort(key=lambda s: getattr(s, "composite_score", 0.0), reverse=True)
 
         for signal in buy_signals:
             ticker = signal.ticker
             sec = getattr(signal, "sector", config.get_ticker_sector(ticker))
+            max_per_sector = config.get_sector_max_positions(sec) if hasattr(config, "get_sector_max_positions") else getattr(config, "MAX_POSITIONS_PER_SECTOR", 2)
             ml_conf = getattr(signal, "ml_confidence", 0.0)
             rs_val = getattr(signal, "rs_score", 0.0)
             comp_val = getattr(signal, "composite_score", 0.0)
             news_lbl = getattr(signal, "news_sentiment", "⚪ NEUTRU")
-            ml_log = f" | Sector: {sec} | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | News: {news_lbl} | Scor: {comp_val:.0f}/100"
+            ml_log = f" | Sector: {sec} | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | News: {news_lbl} | Scor Atac: {comp_val:.0f}/100"
             print(f"[{now_str}] 🎯 Semnal BUY gasit: {ticker} @ ${signal.entry_price}{ml_log}")
 
-            # Verificare Limita de Concentrare pe Sector (ex: max 2 pozitii pe SEMICONDUCTORS)
+            # Verificare Limita de Concentrare pe Sector (ex: pana la 3 pozitii pe SEMICONDUCTORS/SOFTWARE_CLOUD, 0 pe HEALTHCARE)
             if sector_exposure.get(sec, 0) >= max_per_sector:
                 print(
-                    f"[{now_str}] 🏢 SECTOR CAP: Sectorul {sec} are deja {sector_exposure[sec]}/{max_per_sector} "
-                    f"pozitii deschise. Se omite {ticker} pentru protectia portofoliului."
+                    f"[{now_str}] 🏢 SECTOR CAP: Sectorul {sec} are deja {sector_exposure.get(sec, 0)}/{max_per_sector} "
+                    f"pozitii permise. Se omite {ticker} pentru concentrarea capitalului pe liderii principali."
                 )
                 continue
 

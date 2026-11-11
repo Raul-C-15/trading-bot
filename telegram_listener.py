@@ -336,9 +336,12 @@ class TelegramListener:
             from data_loader import get_smart_hybrid_watchlist
             wl, meta = get_smart_hybrid_watchlist(force_refresh=False)
             date_str = meta.get("date", "Azi")
+            hot_sec = ", ".join(meta.get("hot_sectors", [])[:3])
+            hot_line = f"🔥 *Sectoare Fierbinți (Money Flow):* `{hot_sec}`\n" if hot_sec else ""
             msg = (
-                f"🌟 *WATCHLIST SMART HYBRID ({len(wl)} LIDERI)*\n"
-                f"📅 *Actualizat:* `{date_str}`\n\n"
+                f"🌟 *WATCHLIST AI/TECH & SECTOR ROTATION ({len(wl)} LIDERI)*\n"
+                f"📅 *Actualizat:* `{date_str}`\n"
+                f"{hot_line}\n"
                 f"`{', '.join(wl)}`"
             )
             send_telegram_message(msg, reply_markup=QUICK_MENU_MARKUP)

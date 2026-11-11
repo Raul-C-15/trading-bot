@@ -386,12 +386,13 @@ def screen_top_rs_leaders(
     top_n: int = 16
 ) -> List[Dict]:
     """
-    Screener Dinamic Institutional (Stage 2 + Relative Strength):
+    Screener Dinamic Institutional (Stage 2 + Relative Strength + Sector Focus):
     Scaneaza universul extins de actiuni lichide si selecteaza liderii de piata care:
-      1. Se afla in Stage 2 Uptrend (Close > SMA 50 > SMA 200)
-      2. Au lichiditate institutionala (Volum mediu > 800k actiuni/zi)
-      3. Au Forta Relativa superioara fata de S&P 500 (RS_vs_SPY > 0)
-    Returneaza lista sortata descrescator dupa RS_vs_SPY.
+      1. Aparțin sectoarelor de Momentum & Creștere (exclude sectoarele defensive/blocate)
+      2. Se afla in Stage 2 Uptrend (Close > SMA 50 > SMA 200)
+      3. Au lichiditate institutionala (Volum mediu > 500k actiuni/zi)
+      4. Au Forta Relativa superioara fata de S&P 500 (RS_vs_SPY > 0)
+    Returneaza lista sortata descrescator dupa Scorul de Atac (RS_vs_SPY + Prioritate Sector AI/Tech).
     """
     if universe is None:
         universe = getattr(config, "UNIVERSE_POOL", config.WATCHLIST)
@@ -400,6 +401,10 @@ def screen_top_rs_leaders(
     candidates = []
 
     for ticker in universe:
+        sec = config.get_ticker_sector(ticker)
+        if hasattr(config, "is_sector_blocked") and config.is_sector_blocked(sec):
+            continue
+
         try:
             df = fetch_stock_data(ticker, period="1y", spy_df=spy_df)
             if len(df) < 150:
@@ -423,13 +428,17 @@ def screen_top_rs_leaders(
             liquid = vol_sma >= 500_000
 
             if in_stage2 and liquid:
+                sec_bonus = config.get_sector_priority_bonus(sec) if hasattr(config, "get_sector_priority_bonus") else 0.0
+                attack_score = rs_score + (sec_bonus * 0.65)
                 candidates.append({
                     "ticker": ticker,
+                    "sector": sec,
                     "close": round(close, 2),
                     "ema_20": round(ema_20, 2),
                     "sma_50": round(sma_50, 2),
                     "rsi": round(rsi, 1),
                     "rs_vs_spy": round(rs_score, 2),
+                    "attack_score": round(attack_score, 2),
                     "stock_roc": round(stock_roc, 2),
                     "stage2": bool(in_stage2 and sma_50 >= sma_200 * 0.98),
                     "atr_contraction": round(atr_contraction, 2),
@@ -440,43 +449,76 @@ def screen_top_rs_leaders(
         except Exception:
             continue
 
-    candidates.sort(key=lambda x: x["rs_vs_spy"], reverse=True)
+    candidates.sort(key=lambda x: x["attack_score"], reverse=True)
     return candidates[:top_n]
 
 
 DAILY_WATCHLIST_CACHE_FILE = config.BASE_DIR / "data" / "daily_watchlist.json"
 _CORE_DEFAULT_WATCHLIST = list(config.WATCHLIST)
+_SECTOR_STRENGTH_CACHE: Dict[str, float] = {}
+
+
+def get_live_sector_bonus(sector: str) -> float:
+    """
+    Returneaza bonusul combinat al sectorului (0 .. +18 puncte) pentru Scorul Compozit:
+      - Pondere structurala Alpha (AI Semiconductors, Cloud/AI Software, Cybersecurity, AI Power)
+      - Pondere dinamica din Forta Relativa medie a sectorului in piata actuala (Live Sector Rotation)
+    """
+    base_bonus = config.get_sector_priority_bonus(sector) if hasattr(config, "get_sector_priority_bonus") else 0.0
+    if not _SECTOR_STRENGTH_CACHE and DAILY_WATCHLIST_CACHE_FILE.exists():
+        try:
+            data = json.loads(DAILY_WATCHLIST_CACHE_FILE.read_text(encoding="utf-8"))
+            for sec_name, avg_rs in (data.get("sector_avg_rs") or {}).items():
+                _SECTOR_STRENGTH_CACHE[sec_name] = float(avg_rs)
+        except Exception:
+            pass
+
+    live_rs = _SECTOR_STRENGTH_CACHE.get(sector.upper(), 0.0)
+    # Daca sectorul bate S&P 500 puternic (ex: avg RS +15%), primeste pana la +6 puncte extra
+    dynamic_boost = max(-3.0, min(6.0, live_rs * 0.30))
+    return round(base_bonus + dynamic_boost, 2)
 
 
 def get_smart_hybrid_watchlist(force_refresh: bool = False) -> Tuple[List[str], Dict]:
     """
-    Construiește și returnează Watchlist-ul Dinamic 'Smart Hybrid' cu cache zilnic:
-      1. Păstrează liderii din lista de bază (Core Watchlist) care sunt în trend sănătos
-         (Close >= SMA 50 * 0.985), pentru a nu rata intrările pe Pullback la EMA 20.
-      2. Adaugă automat Top 18 Super-Lideri de Forță Relativă (RS vs SPY) în Stage 2
-         din întregul UNIVERSE_POOL (S&P 500 / Nasdaq 100), pentru Breakout-uri.
-      3. Salvează rezultatul în data/daily_watchlist.json pentru ziua curentă.
+    Construiește și returnează Watchlist-ul Dinamic 'Smart Hybrid' orientat pe Sector Rotation & AI/Tech:
+      1. Calculează Forța Relativă a fiecărui sector (Sector Money Flow) și blochează sectoarele defensive
+         (fără Healthcare/Pharma, fără Consumer Staples lente).
+      2. Prioritizează masiv sectoarele fierbinți (Semiconductori AI, Cloud & AI Software, Cybersecurity,
+         AI Data-Center Power Grid & High-Beta Tech) după Scorul de Atac (RS + Sector Alpha).
+      3. Salvează clasamentul sectoarelor și lista celor 35 de lideri în data/daily_watchlist.json.
     """
     today_str = datetime.now().strftime("%Y-%m-%d")
 
     if not force_refresh and DAILY_WATCHLIST_CACHE_FILE.exists():
         try:
             data = json.loads(DAILY_WATCHLIST_CACHE_FILE.read_text(encoding="utf-8"))
-            if data.get("date") == today_str and data.get("watchlist"):
-                config.WATCHLIST = data["watchlist"]
+            cached_wl = data.get("watchlist", [])
+            has_blocked = any(
+                hasattr(config, "is_sector_blocked") and config.is_sector_blocked(config.get_ticker_sector(t))
+                for t in cached_wl
+            )
+            if data.get("date") == today_str and cached_wl and not has_blocked and "hot_sectors" in data:
+                config.WATCHLIST = cached_wl
+                for sec_name, avg_rs in (data.get("sector_avg_rs") or {}).items():
+                    _SECTOR_STRENGTH_CACHE[sec_name] = float(avg_rs)
                 data["from_cache"] = True
-                return data["watchlist"], data
+                return cached_wl, data
         except Exception:
             pass
 
-    print("⚡ Auto-Screener Smart Hybrid: Se actualizează lista de lideri pentru astăzi...")
+    print("⚡ Auto-Screener Sector Rotation & AI/Tech: Se identifică sectoarele unde se fac banii astăzi...")
     spy_df = _get_cached_spy(period="2y")
     universe = list(dict.fromkeys(_CORE_DEFAULT_WATCHLIST + getattr(config, "UNIVERSE_POOL", [])))
 
-    core_kept = []
-    rs_candidates = []
+    sector_rs_buckets: Dict[str, List[float]] = {}
+    scored_stocks: List[Tuple[str, float, float, str, bool]] = []
 
     for ticker in universe:
+        sec = config.get_ticker_sector(ticker)
+        if hasattr(config, "is_sector_blocked") and config.is_sector_blocked(sec):
+            continue
+
         try:
             df = fetch_stock_data(ticker, period="1y", spy_df=spy_df)
             if len(df) < 120:
@@ -488,25 +530,56 @@ def get_smart_hybrid_watchlist(force_refresh: bool = False) -> Tuple[List[str], 
             vol_sma = float(last.get("Volume_SMA_20", 0))
             rs_score = float(last.get("RS_vs_SPY", 0.0))
 
-            if ticker in _CORE_DEFAULT_WATCHLIST and close >= sma_50 * 0.985:
-                core_kept.append(ticker)
-
             in_stage2 = close > sma_50 and (pd.isna(sma_200) or close > sma_200)
-            if in_stage2 and vol_sma >= 500_000 and rs_score > 0:
-                rs_candidates.append((ticker, rs_score))
+            healthy_core = (ticker in _CORE_DEFAULT_WATCHLIST) and (close >= sma_50 * 0.985)
+
+            if in_stage2 and vol_sma >= 500_000:
+                sector_rs_buckets.setdefault(sec, []).append(rs_score)
+
+            if (in_stage2 and vol_sma >= 500_000 and rs_score > -2.0) or healthy_core:
+                scored_stocks.append((ticker, rs_score, close, sec, in_stage2))
         except Exception:
             continue
 
-    rs_candidates.sort(key=lambda x: x[1], reverse=True)
-    top_rs_tickers = [t for t, _ in rs_candidates[:18]]
+    # 1. Calculam Forta Relativa medie pe fiecare sector (Top 6 lideri din fiecare sector)
+    sector_avg_rs: Dict[str, float] = {}
+    for sec, rs_vals in sector_rs_buckets.items():
+        top_vals = sorted(rs_vals, reverse=True)[:6]
+        sector_avg_rs[sec] = round(sum(top_vals) / len(top_vals), 2) if top_vals else 0.0
+        _SECTOR_STRENGTH_CACHE[sec] = sector_avg_rs[sec]
 
-    # Combinare fără duplicate și cu diversificare pe sectoare (max 7 acțiuni per sector în Watchlist):
-    raw_candidates = list(dict.fromkeys(top_rs_tickers + core_kept + _CORE_DEFAULT_WATCHLIST))
+    # Clasament Sectoare Fierbinti (Hot Sectors) combinand RS-ul live cu prioritatea AI/Tech
+    sector_power_ranking = sorted(
+        sector_avg_rs.keys(),
+        key=lambda s: sector_avg_rs[s] + (config.get_sector_priority_bonus(s) * 0.5),
+        reverse=True,
+    )
+    hot_sectors_summary = [f"{s} (RS: {sector_avg_rs[s]:+.1f}%)" for s in sector_power_ranking[:3]]
+
+    # 2. Calculam Scorul de Atac pentru fiecare actiune (RS propriu + Forta Sectorului + Bonus Core AI/Tech)
+    ranked_candidates = []
+    for ticker, rs_score, _close, sec, in_stage2 in scored_stocks:
+        sec_bonus = get_live_sector_bonus(sec)
+        core_bonus = 4.0 if ticker in _CORE_DEFAULT_WATCHLIST[:25] else 0.0
+        stage2_bonus = 3.0 if in_stage2 else 0.0
+        attack_score = rs_score + (sec_bonus * 0.75) + core_bonus + stage2_bonus
+        ranked_candidates.append((ticker, rs_score, attack_score, sec))
+
+    ranked_candidates.sort(key=lambda x: x[2], reverse=True)
+    top_rs_tickers = [t for t, _, _, _ in ranked_candidates[:22]]
+
+    # 3. Construim Watchlist-ul de 35 lideri respectand cotele pe sectoare (fara Healthcare, focus maxim pe AI & Tech)
+    quotas = getattr(config, "SECTOR_WATCHLIST_QUOTA", {})
+    raw_ordered = list(dict.fromkeys([t for t, _, _, _ in ranked_candidates] + _CORE_DEFAULT_WATCHLIST))
+
     hybrid_list = []
     sector_counts: Dict[str, int] = {}
-    for t in raw_candidates:
+    for t in raw_ordered:
         sec = config.get_ticker_sector(t)
-        if sector_counts.get(sec, 0) < 7:
+        if hasattr(config, "is_sector_blocked") and config.is_sector_blocked(sec):
+            continue
+        max_quota = quotas.get(sec, 6)
+        if sector_counts.get(sec, 0) < max_quota:
             hybrid_list.append(t)
             sector_counts[sec] = sector_counts.get(sec, 0) + 1
         if len(hybrid_list) >= 35:
@@ -514,12 +587,17 @@ def get_smart_hybrid_watchlist(force_refresh: bool = False) -> Tuple[List[str], 
 
     config.WATCHLIST = hybrid_list
 
+    # Top 5 Lideri din sectoarele de atac (ordonati dupa Attack Score)
+    top_5_display = [f"{t} ({rs:+.1f}%)" for t, rs, _, _ in ranked_candidates[:5]]
+
     meta = {
         "date": today_str,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "count": len(hybrid_list),
+        "hot_sectors": hot_sectors_summary,
+        "sector_avg_rs": sector_avg_rs,
         "top_rs_added": [t for t in top_rs_tickers if t not in _CORE_DEFAULT_WATCHLIST][:10],
-        "top_5_rs": [f"{t} ({rs:+.1f}%)" for t, rs in rs_candidates[:5]],
+        "top_5_rs": top_5_display,
         "sectors": sector_counts,
         "watchlist": hybrid_list,
         "from_cache": False

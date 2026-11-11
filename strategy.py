@@ -367,19 +367,28 @@ def check_breakout_setup(
 
 def _compute_composite_score(signal: TradeSignal) -> float:
     """
-    Calculeaza un scor compozit (0 - 100) pentru prioritizarea semnalelor cand
+    Calculeaza un scor compozit de atac (0 - 100) pentru prioritizarea semnalelor cand
     apar mai multe oportunitati in aceeasi zi decat numarul de locuri in portofoliu:
-      - 60% pondere din increderea modelului ML (daca este activ)
-      - 40% pondere din Forta Relativa fata de SPY (RS_vs_SPY normalizat)
+      - 42% pondere din increderea modelului ML (daca este activ)
+      - 38% pondere din Forta Relativa fata de SPY (RS_vs_SPY normalizat)
+      - Pana la +18 puncte Bonus de Rotatie Sectoriala & Alpha (prioritate maxima pe AI, Semiconductori, Cloud & Cyber)
       - Bonus/Penalizare Catalizator Știri (-5 la +5 puncte)
     """
-    ml_part = (signal.ml_confidence if signal.ml_confidence > 0 else 0.55) * 60.0
+    ml_part = (signal.ml_confidence if signal.ml_confidence > 0 else 0.55) * 42.0
     rs_clamped = max(-10.0, min(40.0, signal.rs_score))
-    rs_part = ((rs_clamped + 10.0) / 50.0) * 40.0
+    rs_part = ((rs_clamped + 10.0) / 50.0) * 38.0
+
+    sec = getattr(signal, "sector", None) or config.get_ticker_sector(signal.ticker)
+    try:
+        from data_loader import get_live_sector_bonus
+        sec_bonus = get_live_sector_bonus(sec)
+    except Exception:
+        sec_bonus = config.get_sector_priority_bonus(sec) if hasattr(config, "get_sector_priority_bonus") else 0.0
+
     raw_news_score = getattr(signal, "news_score", 0.0)
     news_val = float(raw_news_score) if isinstance(raw_news_score, (int, float)) else 0.0
     news_bonus = max(-5.0, min(5.0, news_val * 2.5))
-    return round(max(0.0, min(100.0, ml_part + rs_part + news_bonus)), 2)
+    return round(max(0.0, min(100.0, ml_part + rs_part + sec_bonus + news_bonus)), 2)
 
 
 def _apply_ml_filter(ticker: str, df: pd.DataFrame, signal: "TradeSignal") -> "TradeSignal":
@@ -446,9 +455,30 @@ def analyze_ticker(
 ) -> TradeSignal:
     """
     Evalueaza un ticker testand toate scenariile cu filtre de confirmare multi-timeframe,
-    Forta Relativa (RS vs SPY), protectie Earnings, Cooldown si Machine Learning.
+    Sector Rotation (focus pe AI & Tech), Forta Relativa (RS vs SPY), protectie Earnings,
+    Cooldown si Machine Learning.
     """
     last_rs = float(df["RS_vs_SPY"].iloc[-1]) if len(df) > 0 and "RS_vs_SPY" in df.columns and not pd.isna(df["RS_vs_SPY"].iloc[-1]) else 0.0
+    sector = config.get_ticker_sector(ticker)
+
+    # 0. Filtru Sector Rotation: Blocam sectoarele defensive/lente (Healthcare, Staples, Oil)
+    if getattr(config, "USE_SECTOR_ROTATION", True) and hasattr(config, "is_sector_blocked") and config.is_sector_blocked(sector):
+        return TradeSignal(
+            ticker=ticker,
+            action="NO_TRADE",
+            setup_type="NONE",
+            entry_price=0.0,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            risk_per_share=0.0,
+            risk_reward_ratio=0.0,
+            shares=0.0,
+            position_cost=0.0,
+            reason=f"🚫 SECTOR DEFENSIV EXCLUS ({sector}): Capitalul este rezervat exclusiv pentru sectoarele de Momentum (AI, Semiconductori, Cloud & Tech).",
+            rs_score=last_rs,
+            sector=sector
+        )
 
     if not is_market_bullish:
         return TradeSignal(
@@ -464,7 +494,8 @@ def analyze_ticker(
             shares=0.0,
             position_cost=0.0,
             reason="Piața generală (SPY) este în Regim Bearish (sub SMA 200 sau VIX extrem). Nu deschidem poziții Long.",
-            rs_score=last_rs
+            rs_score=last_rs,
+            sector=sector
         )
 
     # Verificare Cooldown
@@ -483,7 +514,8 @@ def analyze_ticker(
             shares=0.0,
             position_cost=0.0,
             reason=f"🔒 BLOCAT ÎN CARANTINĂ: {cooldown_msg}",
-            rs_score=last_rs
+            rs_score=last_rs,
+            sector=sector
         )
 
     # Verificare Earnings Risk (Anti-Binary Risk)
@@ -507,7 +539,8 @@ def analyze_ticker(
                 shares=0.0,
                 position_cost=0.0,
                 reason=earnings_msg,
-                rs_score=last_rs
+                rs_score=last_rs,
+                sector=sector
             )
     except Exception:
         pass
@@ -526,7 +559,8 @@ def analyze_ticker(
             shares=0.0,
             position_cost=0.0,
             reason="Date istorice insuficiente pentru calcul.",
-            rs_score=last_rs
+            rs_score=last_rs,
+            sector=sector
         )
 
     # Verificare Confluență Multi-Timeframe (1W - Grafic Săptămânal)
@@ -546,7 +580,30 @@ def analyze_ticker(
             shares=0.0,
             position_cost=0.0,
             reason=f"📉 MULTI-TIMEFRAME (1W): {weekly_reason}",
-            rs_score=last_rs
+            rs_score=last_rs,
+            sector=sector
+        )
+
+    # Filtru de Selectivitate Sectoriala: Sectoarele secundare (ex: FINANCIALS) au voie sa intre
+    # DOAR daca sunt Super-Lideri cu Forta Relativa ridicata (RS >= +5%), ca sa nu ocupe locurile AI/Tech!
+    tier1_sectors = {"SEMICONDUCTORS", "SOFTWARE_CLOUD", "CYBERSECURITY", "AI_POWER_INFRA"}
+    if getattr(config, "USE_SECTOR_ROTATION", True) and sector not in tier1_sectors and last_rs < 3.5:
+        last_close = float(df["Close"].iloc[-1])
+        return TradeSignal(
+            ticker=ticker,
+            action="NO_TRADE",
+            setup_type="NONE",
+            entry_price=last_close,
+            stop_loss=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            risk_per_share=0.0,
+            risk_reward_ratio=0.0,
+            shares=0.0,
+            position_cost=0.0,
+            reason=f"🎯 FOCUS AI/TECH: Simbolul din {sector} are RS prea mic ({last_rs:+.1f}% < +3.5%) pentru a concura cu liderii Tech/AI.",
+            rs_score=last_rs,
+            sector=sector
         )
 
     # 1. Testare Scenariul 1: Pullback Confirmat la EMA 20
@@ -562,7 +619,7 @@ def analyze_ticker(
                 candidate = breakout
 
     if candidate:
-        candidate.sector = config.get_ticker_sector(ticker)
+        candidate.sector = sector
         candidate.reason = f"{candidate.reason} [📅 1W Stage 2]"
 
         # 3. Verificare Catalizatori Știri & Sentiment Live (Alpaca News API)

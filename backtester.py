@@ -173,7 +173,7 @@ class Backtester:
         tp2 = round(entry_price + (tp2_rr * risk_per_share), 2)
 
         rs_clamped = max(-10.0, min(40.0, rs_vs_spy if not np.isnan(rs_vs_spy) else 0.0))
-        comp_score = (ml_conf * 60.0) + (((rs_clamped + 10.0) / 50.0) * 40.0)
+        comp_score = (ml_conf * 45.0) + (((rs_clamped + 10.0) / 50.0) * 45.0)
 
         return {
             "setup_type": setup_type,
@@ -608,6 +608,8 @@ def run_portfolio_backtest(
                 sig = helper_bt._check_entry_on_bar(df, int(idx_loc), market_ok=True)
                 if sig is not None:
                     sig["ticker"] = ticker
+                    sec_bonus = config.get_sector_priority_bonus(config.get_ticker_sector(ticker)) if hasattr(config, "get_sector_priority_bonus") else 0.0
+                    sig["composite_score"] = round(min(100.0, sig["composite_score"] + sec_bonus), 2)
                     day_candidates.append(sig)
 
             # Sortam candidatii zilei dupa Scorul Compozit (Liderii cu cel mai mare RS + ML primii!)

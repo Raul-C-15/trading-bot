@@ -125,12 +125,14 @@ def run_smart_scan(trader: AlpacaTrader):
     else:
         print("   ℹ️ Mod Simulare Locală activ.")
 
-    print("\n🌟 [PAS 3/5] Pregătire Watchlist Dinamic 'Smart Hybrid' (Core + Top RS Stage 2)...")
+    print("\n🌟 [PAS 3/5] Pregătire Watchlist Dinamic 'Sector Rotation & AI/Tech' (Focus pe sectoarele puternice)...")
     watchlist, wl_meta = get_smart_hybrid_watchlist(force_refresh=False)
     cache_tag = "din cache-ul de azi (instant)" if wl_meta.get("from_cache") else "proaspăt calculat"
     print(f"   ✅ {len(watchlist)} lideri selectați ({cache_tag}).")
+    if wl_meta.get("hot_sectors"):
+        print(f"   🔥 Sectoare Fierbinți (Money Flow): {', '.join(wl_meta['hot_sectors'])}")
     if wl_meta.get("top_5_rs"):
-        print(f"   🔥 Top Forță Relativă azi: {', '.join(wl_meta['top_5_rs'])}")
+        print(f"   🚀 Top Lideri de Atac azi: {', '.join(wl_meta['top_5_rs'])}")
 
     print("\n📊 [PAS 4/5] Analiză Regim de Piață Multi-Tier (SPY + QQQ + VIX)...")
     try:
@@ -248,10 +250,11 @@ def run_smart_scan(trader: AlpacaTrader):
         available_slots = max(0, max_pos_allowed - active_risk_count)
         recommended_signals = buy_signals[:available_slots] if available_slots > 0 else []
 
-        print(f"\n🚀 S-au identificat {len(buy_signals)} semnale valide de CUMPĂRARE (ordonate după Scorul Compozit ML + RS):")
+        print(f"\n🚀 S-au identificat {len(buy_signals)} semnale valide de CUMPĂRARE (ordonate după Scorul de Atac AI/Tech + RS + ML):")
         for idx, sig in enumerate(buy_signals, start=1):
+            sec_str = getattr(sig, "sector", config.get_ticker_sector(sig.ticker))
             ml_tag = f" | ML: {sig.ml_confidence*100:.1f}%" if getattr(sig, "ml_confidence", 0) > 0 else ""
-            rs_tag = f" | RS: {sig.rs_score:+.1f}% | Scor: {sig.composite_score:.0f}/100"
+            rs_tag = f" | Sector: {sec_str} | RS: {sig.rs_score:+.1f}% | Scor Atac: {sig.composite_score:.0f}/100"
             slot_tag = "✅ SELECTAT PT. EXECUȚIE" if sig in recommended_signals else "⏸️ Peste limita de poziții"
             print(
                 f"   {idx}. [{slot_tag}] {sig.ticker} ({sig.setup_type}): Intrare ~${sig.entry_price} | "
@@ -401,9 +404,9 @@ def run_backtest_and_lab_menu():
 
 
 def run_dynamic_screener():
-    """Scanează universul extins (UNIVERSE_POOL) și afișează tabelul liderilor de piață Top RS Stage 2."""
-    print(f"\n🌟 SCREENER DINAMIC LIDERI DE PIAȚĂ (Univers: {len(config.UNIVERSE_POOL)} companii din S&P 500 / Nasdaq 100)")
-    print("   Se calculează Puterea Relativă (IBD Weighted ROC vs SPY) și filtrele Stage 2 (Preț > SMA 50 > SMA 200)...")
+    """Scanează universul extins (UNIVERSE_POOL) și afișează tabelul liderilor de piață Top RS Stage 2 (Focus AI & Tech)."""
+    print(f"\n🌟 SCREENER SECTOR ROTATION & LIDERI AI/TECH (Univers: {len(config.UNIVERSE_POOL)} companii High-Alpha)")
+    print("   Se calculează Puterea Relativă (IBD Weighted ROC vs SPY), Rotația pe Sectoare și filtrele Stage 2...")
     ranked = screen_top_rs_leaders(top_n=config.TOP_LEADERS_COUNT)
     if not ranked:
         print("⚠️ Nu s-au putut clasifica simbolurile.")
@@ -415,24 +418,28 @@ def run_dynamic_screener():
         st2 = "🟢 Stage 2 Lider" if is_st2 else "⚪ Consolidare"
         atr_c = item.get("atr_contraction", 1.0)
         vcp = "🔥 VCP Strâns" if atr_c <= 0.85 else f"{atr_c:.2f}"
-        stock_roc = item.get("stock_roc", item.get("rs_vs_spy", 0.0))
+        sec_str = item.get("sector", config.get_ticker_sector(item["ticker"]))
+        atk_score = item.get("attack_score", item.get("rs_vs_spy", 0.0))
         d_vol = item.get("dollar_vol_m", 0.0)
         table.append([
             idx,
             item["ticker"],
+            sec_str,
             f"${item['close']:.2f}",
             f"{item['rs_vs_spy']:+.2f}%",
-            f"{stock_roc:+.2f}%",
+            f"{atk_score:+.1f}",
             st2,
             vcp,
             f"${d_vol:.0f}M"
         ])
 
-    headers = ["#", "Simbol", "Preț", "RS vs SPY", "Scor ROC", "Trend Stage 2", "Contracție ATR", "Volum Zilnic ($)"]
+    headers = ["#", "Simbol", "Sector", "Preț", "RS vs SPY", "Scor Atac", "Trend Stage 2", "Contracție ATR", "Volum Zilnic ($)"]
     print("\n" + tabulate(table, headers=headers, tablefmt="grid"))
 
-    wl, _ = get_smart_hybrid_watchlist(force_refresh=True)
-    print(f"\n✅ Watchlist-ul Smart Hybrid a fost actualizat și salvat în cache ({len(wl)} lideri): {', '.join(wl[:12])}...")
+    wl, wl_meta = get_smart_hybrid_watchlist(force_refresh=True)
+    if wl_meta.get("hot_sectors"):
+        print(f"\n🔥 Sectoare Fierbinți (Money Flow): {', '.join(wl_meta['hot_sectors'])}")
+    print(f"✅ Watchlist-ul AI/Tech & Sector Rotation a fost actualizat ({len(wl)} lideri): {', '.join(wl[:15])}...")
 
 
 def show_account_status(trader: AlpacaTrader):
