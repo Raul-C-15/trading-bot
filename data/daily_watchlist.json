@@ -1,6 +1,6 @@
 {
-  "date": "2026-11-10",
-  "updated_at": "2026-11-10 14:43",
+  "date": "2026-11-11",
+  "updated_at": "2026-11-11 13:46",
   "count": 35,
   "top_rs_added": [
     "REGN",
@@ -9,17 +9,17 @@
     "ABBV",
     "ABNB",
     "SPGI",
-    "VRTX",
     "DAL",
-    "HD",
-    "UAL"
+    "VRTX",
+    "LMT",
+    "HD"
   ],
   "top_5_rs": [
     "LLY (+28.5%)",
-    "REGN (+26.7%)",
-    "SPOT (+25.8%)",
-    "RCL (+23.5%)",
-    "ABBV (+22.3%)"
+    "REGN (+25.9%)",
+    "SPOT (+25.6%)",
+    "RCL (+23.6%)",
+    "ABBV (+21.4%)"
   ],
   "sectors": {
     "HEALTHCARE": 6,
@@ -35,21 +35,23 @@
     "SPOT",
     "RCL",
     "ABBV",
-    "ABNB",
     "MA",
-    "V",
+    "ABNB",
     "SPGI",
-    "VRTX",
+    "V",
     "DAL",
+    "VRTX",
+    "LMT",
     "HD",
-    "UAL",
-    "MSFT",
     "BLK",
+    "UAL",
     "DIS",
     "KO",
-    "LMT",
+    "MSFT",
     "AAPL",
     "AMZN",
+    "AVGO",
+    "AMD",
     "JPM",
     "GE",
     "CEG",
@@ -62,8 +64,6 @@
     "ORCL",
     "NOW",
     "PLTR",
-    "AVGO",
-    "AMD",
     "TSM"
   ],
   "from_cache": false
