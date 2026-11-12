@@ -7,12 +7,12 @@
         "tp1": 422.25,
         "tp2": 454.42,
         "initial_qty": 0.1845,
-        "peak_price": 396.17,
+        "peak_price": 399.2849,
         "tp1_hit": false,
-        "breakeven_active": false,
+        "breakeven_active": true,
         "fractional_managed": true,
-        "last_stop_price": 368.62,
-        "updated_at": "2026-11-11 20:43:39"
+        "last_stop_price": 390.77,
+        "updated_at": "2026-11-12 20:22:16"
     },
     "TSM": {
         "setup_type": "PULLBACK_EMA20",
