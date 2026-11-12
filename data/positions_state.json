@@ -93,11 +93,11 @@
         "tp1": 596.89,
         "tp2": 642.39,
         "initial_qty": 0.3172,
-        "peak_price": 576.9169,
+        "peak_price": 578.855,
         "tp1_hit": false,
         "breakeven_active": true,
         "fractional_managed": true,
-        "last_stop_price": 551.97,
-        "updated_at": "2026-11-11 18:11:27"
+        "last_stop_price": 556.86,
+        "updated_at": "2026-11-12 15:56:52"
     }
 }
