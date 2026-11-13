@@ -69,5 +69,20 @@
         "fractional_managed": true,
         "last_stop_price": 437.61,
         "updated_at": "2026-11-11 14:45:33"
+    },
+    "XYZ": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 82.98,
+        "initial_stop": 80.84,
+        "initial_risk": 2.14,
+        "tp1": 86.19,
+        "tp2": 89.41,
+        "initial_qty": 2.992,
+        "peak_price": 82.98,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 80.84,
+        "updated_at": "2026-11-13 15:16:08"
     }
 }
