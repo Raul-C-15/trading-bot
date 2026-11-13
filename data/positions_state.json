@@ -78,7 +78,7 @@
         "tp1": 547.84,
         "tp2": 571.92,
         "initial_qty": 0.1935,
-        "peak_price": 525.2791,
+        "peak_price": 525.5,
         "tp1_hit": false,
         "breakeven_active": false,
         "fractional_managed": true,
