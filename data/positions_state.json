@@ -40,21 +40,6 @@
         "last_stop_price": 331.1,
         "updated_at": "2026-11-09 16:03:58"
     },
-    "LMT": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 592.09,
-        "initial_stop": 561.85,
-        "initial_risk": 30.24,
-        "tp1": 637.45,
-        "tp2": 682.81,
-        "initial_qty": 0.1658,
-        "peak_price": 618.24,
-        "tp1_hit": false,
-        "breakeven_active": true,
-        "fractional_managed": true,
-        "last_stop_price": 593.15,
-        "updated_at": "2026-11-10 17:09:01"
-    },
     "ISRG": {
         "setup_type": "PULLBACK_EMA20",
         "entry_price": 450.22,
