@@ -1,70 +1,68 @@
 {
-  "date": "2026-11-12",
-  "updated_at": "2026-11-12 13:46",
+  "date": "2026-11-13",
+  "updated_at": "2026-11-13 13:45",
   "count": 35,
   "hot_sectors": [
-    "CYBERSECURITY (RS: +13.4%)",
-    "HIGH_BETA_GROWTH (RS: +13.6%)",
-    "SOFTWARE_CLOUD (RS: +9.2%)"
+    "FINANCIALS (RS: +15.5%)",
+    "SEMICONDUCTORS (RS: +8.1%)",
+    "HIGH_BETA_GROWTH (RS: +9.6%)"
   ],
   "sector_avg_rs": {
-    "SEMICONDUCTORS": 6.22,
-    "SOFTWARE_CLOUD": 9.15,
-    "HIGH_BETA_GROWTH": 13.58,
-    "CYBERSECURITY": 13.38,
-    "AI_POWER_INFRA": 10.07,
-    "FINANCIALS": 10.96
+    "SEMICONDUCTORS": 8.08,
+    "SOFTWARE_CLOUD": 6.44,
+    "AI_POWER_INFRA": 4.8,
+    "HIGH_BETA_GROWTH": 9.56,
+    "FINANCIALS": 15.46
   },
   "top_rs_added": [
-    "IOT",
-    "S",
-    "XYZ",
     "MA",
-    "URI",
+    "IOT",
     "V",
     "MPWR",
+    "URI",
     "ABNB",
+    "XYZ",
     "IBM",
-    "GE"
+    "SNPS",
+    "CDNS"
   ],
   "top_5_rs": [
-    "APP (+26.8%)",
-    "SPOT (+19.8%)",
-    "AMD (+11.2%)",
-    "IOT (+16.1%)",
-    "AAPL (+11.6%)"
+    "ANET (+18.0%)",
+    "AMD (+15.2%)",
+    "APP (+18.8%)",
+    "AAPL (+9.6%)",
+    "NET (+17.2%)"
   ],
   "sectors": {
-    "SOFTWARE_CLOUD": 11,
-    "HIGH_BETA_GROWTH": 4,
     "SEMICONDUCTORS": 12,
+    "SOFTWARE_CLOUD": 11,
     "CYBERSECURITY": 3,
     "FINANCIALS": 2,
+    "HIGH_BETA_GROWTH": 4,
     "AI_POWER_INFRA": 3
   },
   "watchlist": [
-    "APP",
-    "SPOT",
-    "AMD",
-    "IOT",
-    "AAPL",
     "ANET",
-    "MSFT",
-    "S",
-    "XYZ",
+    "AMD",
+    "APP",
+    "AAPL",
     "NET",
     "MA",
-    "URI",
+    "IOT",
     "V",
+    "SPOT",
     "MPWR",
+    "MSFT",
+    "URI",
     "ABNB",
-    "IBM",
     "AMZN",
-    "GE",
+    "XYZ",
+    "IBM",
     "SNPS",
+    "AVGO",
     "TSLA",
     "CDNS",
-    "AVGO",
+    "GE",
     "CEG",
     "NVDA",
     "TSM",
@@ -77,7 +75,8 @@
     "GOOGL",
     "ORCL",
     "NOW",
-    "CRWD"
+    "CRWD",
+    "PANW"
   ],
   "from_cache": false
 }
