@@ -194,5 +194,19 @@
         "result": "WIN",
         "exit_type": "TAKE_PROFIT",
         "closed_at": "2026-11-13 14:30:00"
+    },
+    {
+        "id": "TR_0015",
+        "alpaca_order_id": "941e66cd-39a9-4f0a-9960-444bb7ef1870",
+        "ticker": "LMT",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 592.26,
+        "exit_price": 592.24,
+        "shares": 0.1658,
+        "pnl": -0.0,
+        "pnl_pct": -0.0,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-13 15:17:17"
     }
 ]
