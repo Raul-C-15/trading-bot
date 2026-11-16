@@ -41,6 +41,27 @@
       "news_sentiment": "⚪ NEUTRU",
       "news_headline": "If You Invested $1000 In Block Stock 10 Years Ago, You Would Have This Much Today",
       "news_score": 0.0
+    },
+    "IOT_1794844945": {
+      "ticker": "IOT",
+      "action": "BUY",
+      "setup_type": "PULLBACK_EMA20",
+      "entry_price": 41.66,
+      "stop_loss": 39.6,
+      "tp1": 44.73,
+      "tp2": 47.8,
+      "risk_per_share": 2.05,
+      "risk_reward_ratio": 1.5,
+      "shares": 4.6992,
+      "position_cost": 195.75,
+      "reason": "Setup PULLBACK CONFIRMAT: Ricoșeu validat la EMA 20 | RS vs SPY: +16.7%. [📅 1W Stage 2] [🧠 ML: 59.7% WIN | Scor: 61/100]",
+      "ml_confidence": 0.597,
+      "rs_score": 16.73,
+      "composite_score": 61.2,
+      "sector": "SOFTWARE_CLOUD",
+      "news_sentiment": "⚪ NEUTRU",
+      "news_headline": "Truist Securities Maintains Hold on Samsara, Lowers Price Target to $41",
+      "news_score": 0.0
     }
   },
   "alerted_today": {
@@ -57,7 +78,8 @@
     "SNPS": "2026-11-12",
     "XYZ": "2026-11-16",
     "IBM": "2026-11-13",
-    "URI": "2026-11-16"
+    "URI": "2026-11-16",
+    "IOT": "2026-11-16"
   },
   "last_update_id": 935411378,
   "auto_trade": true
