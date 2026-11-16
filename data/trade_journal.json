@@ -222,5 +222,19 @@
         "result": "WIN",
         "exit_type": "TAKE_PROFIT",
         "closed_at": "2026-11-16 14:34:18"
+    },
+    {
+        "id": "TR_0017",
+        "alpaca_order_id": "bc03e8c0-95a1-45c3-b861-714822275314",
+        "ticker": "ISRG",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 450.89,
+        "exit_price": 437.14,
+        "shares": 0.4479,
+        "pnl": -6.16,
+        "pnl_pct": -3.05,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-16 19:47:22"
     }
 ]
