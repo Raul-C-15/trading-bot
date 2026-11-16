@@ -208,5 +208,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-13 15:17:17"
+    },
+    {
+        "id": "TR_0016",
+        "alpaca_order_id": "e3d0c996-47cc-461c-8270-1ab796aa1053",
+        "ticker": "XYZ",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 82.98,
+        "exit_price": 83.35,
+        "shares": 2.992,
+        "pnl": 1.11,
+        "pnl_pct": 0.45,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-16 14:34:18"
     }
 ]
