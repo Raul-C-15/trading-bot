@@ -40,21 +40,6 @@
         "last_stop_price": 331.1,
         "updated_at": "2026-11-09 16:03:58"
     },
-    "MSFT": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 523.75,
-        "initial_stop": 507.69,
-        "initial_risk": 16.06,
-        "tp1": 547.84,
-        "tp2": 571.92,
-        "initial_qty": 0.1935,
-        "peak_price": 526.1,
-        "tp1_hit": false,
-        "breakeven_active": false,
-        "fractional_managed": true,
-        "last_stop_price": 507.69,
-        "updated_at": "2026-11-13 17:19:04"
-    },
     "XYZ": {
         "setup_type": "PULLBACK_EMA20",
         "entry_price": 82.98,
