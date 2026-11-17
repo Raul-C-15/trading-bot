@@ -69,5 +69,20 @@
         "breakeven_active": true,
         "last_stop_price": 83.1,
         "updated_at": "2026-11-16 14:34:02"
+    },
+    "URI": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 1104.64,
+        "initial_stop": 1071.2,
+        "initial_risk": 33.44,
+        "tp1": 1154.8,
+        "tp2": 1204.96,
+        "initial_qty": 0.2215,
+        "peak_price": 1104.64,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 1071.2,
+        "updated_at": "2026-11-17 14:45:38"
     }
 }
