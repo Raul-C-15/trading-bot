@@ -69,5 +69,20 @@
         "fractional_managed": true,
         "last_stop_price": 1071.2,
         "updated_at": "2026-11-17 14:45:38"
+    },
+    "AMZN": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 258.41,
+        "initial_stop": 251.17,
+        "initial_risk": 7.24,
+        "tp1": 269.27,
+        "tp2": 280.13,
+        "initial_qty": 0.9434,
+        "peak_price": 258.41,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 251.17,
+        "updated_at": "2026-11-17 15:32:07"
     }
 }
