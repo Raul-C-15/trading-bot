@@ -250,5 +250,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-17 15:29:43"
+    },
+    {
+        "id": "TR_0019",
+        "alpaca_order_id": "d1b83d27-0f41-4f92-8e2c-f72ab8294645",
+        "ticker": "JPM",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 340.87,
+        "exit_price": 330.92,
+        "shares": 0.7269,
+        "pnl": -7.23,
+        "pnl_pct": -2.92,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-17 15:43:14"
     }
 ]
