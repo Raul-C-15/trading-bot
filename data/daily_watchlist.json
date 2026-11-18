@@ -1,33 +1,32 @@
 {
-  "date": "2026-11-17",
-  "updated_at": "2026-11-17 14:17",
+  "date": "2026-11-18",
+  "updated_at": "2026-11-18 13:50",
   "count": 35,
   "hot_sectors": [
-    "FINANCIALS (RS: +19.6%)",
-    "HIGH_BETA_GROWTH (RS: +16.1%)",
-    "SOFTWARE_CLOUD (RS: +11.4%)"
+    "FINANCIALS (RS: +16.4%)",
+    "HIGH_BETA_GROWTH (RS: +10.1%)",
+    "SOFTWARE_CLOUD (RS: +7.1%)"
   ],
   "sector_avg_rs": {
-    "SOFTWARE_CLOUD": 11.42,
-    "AI_POWER_INFRA": 5.61,
-    "HIGH_BETA_GROWTH": 16.08,
-    "FINANCIALS": 19.57
+    "SOFTWARE_CLOUD": 7.06,
+    "HIGH_BETA_GROWTH": 10.07,
+    "AI_POWER_INFRA": 7.2,
+    "FINANCIALS": 16.41
   },
   "top_rs_added": [
     "MA",
-    "ABNB",
     "V",
-    "XYZ",
-    "HUBS",
+    "ABNB",
     "URI",
-    "GE"
+    "GE",
+    "XYZ"
   ],
   "top_5_rs": [
-    "APP (+27.1%)",
-    "SPOT (+20.1%)",
-    "AAPL (+11.7%)",
-    "MA (+20.2%)",
-    "ABNB (+17.3%)"
+    "APP (+22.1%)",
+    "AAPL (+12.7%)",
+    "SPOT (+18.0%)",
+    "MA (+16.8%)",
+    "V (+16.0%)"
   ],
   "sectors": {
     "SOFTWARE_CLOUD": 11,
@@ -39,21 +38,19 @@
   },
   "watchlist": [
     "APP",
-    "SPOT",
     "AAPL",
+    "SPOT",
     "MA",
-    "ABNB",
     "V",
-    "MSFT",
-    "XYZ",
-    "HUBS",
+    "ABNB",
     "URI",
     "AMZN",
-    "CEG",
     "GE",
-    "TSLA",
-    "NVDA",
+    "XYZ",
     "AVGO",
+    "TSLA",
+    "CEG",
+    "NVDA",
     "AMD",
     "TSM",
     "MU",
@@ -65,10 +62,12 @@
     "CRDO",
     "PLTR",
     "META",
+    "MSFT",
     "GOOGL",
     "ORCL",
     "NOW",
     "SNOW",
+    "CRM",
     "CRWD",
     "PANW",
     "NET",
