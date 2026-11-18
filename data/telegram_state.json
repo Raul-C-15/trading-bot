@@ -1,27 +1,5 @@
 {
-  "pending_signals": {
-    "AMZN_1794926739": {
-      "ticker": "AMZN",
-      "action": "BUY",
-      "setup_type": "PULLBACK_EMA20",
-      "entry_price": 258.32,
-      "stop_loss": 251.09,
-      "tp1": 269.17,
-      "tp2": 280.01,
-      "risk_per_share": 7.23,
-      "risk_reward_ratio": 1.5,
-      "shares": 0.947,
-      "position_cost": 244.63,
-      "reason": "Setup PULLBACK CONFIRMAT: Ricoșeu validat la EMA 20 | RS vs SPY: +0.2%. [📅 1W Stage 2] [🧠 ML: 58.9% WIN | Scor: 48/100]",
-      "ml_confidence": 0.589,
-      "rs_score": 0.21,
-      "composite_score": 47.93,
-      "sector": "SOFTWARE_CLOUD",
-      "news_sentiment": "⚪ NEUTRU",
-      "news_headline": "Amazon Expands Grocery Delivery to Include Prepared Meals",
-      "news_score": 0.0
-    }
-  },
+  "pending_signals": {},
   "alerted_today": {
     "_PREMARKET_SENT_": "2026-11-18",
     "_EOD_SENT_": "2026-11-17",
@@ -32,7 +10,7 @@
     "LMT": "2026-11-10",
     "ISRG": "2026-11-11",
     "AMD": "2026-11-11",
-    "TSLA": "2026-11-11",
+    "TSLA": "2026-11-18",
     "SNPS": "2026-11-12",
     "XYZ": "2026-11-16",
     "IBM": "2026-11-13",

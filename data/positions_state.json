@@ -48,7 +48,7 @@
         "tp1": 269.27,
         "tp2": 280.13,
         "initial_qty": 0.9434,
-        "peak_price": 267.81,
+        "peak_price": 267.84,
         "tp1_hit": false,
         "breakeven_active": true,
         "fractional_managed": true,
@@ -63,11 +63,26 @@
         "tp1": 188.34,
         "tp2": 195.95,
         "initial_qty": 1.3438,
-        "peak_price": 183.05,
+        "peak_price": 183.3,
         "tp1_hit": false,
         "breakeven_active": false,
         "fractional_managed": true,
         "last_stop_price": 175.67,
         "updated_at": "2026-11-18 14:45:26"
+    },
+    "TSLA": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 386.43,
+        "initial_stop": 372.07,
+        "initial_risk": 14.36,
+        "tp1": 407.97,
+        "tp2": 429.51,
+        "initial_qty": 0.6334,
+        "peak_price": 386.43,
+        "tp1_hit": false,
+        "breakeven_active": false,
+        "fractional_managed": true,
+        "last_stop_price": 372.07,
+        "updated_at": "2026-11-18 18:49:58"
     }
 }
