@@ -306,5 +306,47 @@
         "result": "WIN",
         "exit_type": "TAKE_PROFIT",
         "closed_at": "2026-11-19 15:33:26"
+    },
+    {
+        "id": "TR_0023",
+        "alpaca_order_id": "a08a8a5d-1825-4f5a-9335-a657e2d9976d",
+        "ticker": "TSLA",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 386.41,
+        "exit_price": 370.87,
+        "shares": 0.6334,
+        "pnl": -9.84,
+        "pnl_pct": -4.02,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-19 17:06:12"
+    },
+    {
+        "id": "TR_0024",
+        "alpaca_order_id": "a08e3582-2cd7-460f-bbe7-bac799cf9a1e",
+        "ticker": "AMZN",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 258.5,
+        "exit_price": 263.13,
+        "shares": 0.4717,
+        "pnl": 2.18,
+        "pnl_pct": 1.79,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-19 17:06:11"
+    },
+    {
+        "id": "TR_0025",
+        "alpaca_order_id": "dadd92c0-ec79-4d43-a621-cec50087afcb",
+        "ticker": "ABNB",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 180.76,
+        "exit_price": 175.45,
+        "shares": 1.3438,
+        "pnl": -7.14,
+        "pnl_pct": -2.94,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-19 17:06:12"
     }
 ]
