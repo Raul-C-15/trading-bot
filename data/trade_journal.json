@@ -278,5 +278,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-17 20:01:20"
+    },
+    {
+        "id": "TR_0021",
+        "alpaca_order_id": "b79a21c4-3609-43a4-997c-b9bba1c15179",
+        "ticker": "AMZN",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 258.5,
+        "exit_price": 272.54,
+        "shares": 0.4717,
+        "pnl": 6.62,
+        "pnl_pct": 5.43,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-19 14:30:00"
     }
 ]

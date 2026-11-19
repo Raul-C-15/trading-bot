@@ -48,12 +48,12 @@
         "tp1": 269.27,
         "tp2": 280.13,
         "initial_qty": 0.9434,
-        "peak_price": 268.105,
-        "tp1_hit": false,
+        "peak_price": 273.335,
+        "tp1_hit": true,
         "breakeven_active": true,
         "fractional_managed": true,
-        "last_stop_price": 258.89,
-        "updated_at": "2026-11-18 15:00:33"
+        "last_stop_price": 262.77,
+        "updated_at": "2026-11-19 14:32:01"
     },
     "ABNB": {
         "setup_type": "PULLBACK_EMA20",
@@ -78,7 +78,7 @@
         "tp1": 407.97,
         "tp2": 429.51,
         "initial_qty": 0.6334,
-        "peak_price": 386.56,
+        "peak_price": 393.03,
         "tp1_hit": false,
         "breakeven_active": false,
         "fractional_managed": true,
@@ -93,11 +93,26 @@
         "tp1": 209.38,
         "tp2": 225.34,
         "initial_qty": 0.2338,
-        "peak_price": 194.9,
+        "peak_price": 199.62,
+        "tp1_hit": false,
+        "breakeven_active": true,
+        "fractional_managed": true,
+        "last_stop_price": 193.54,
+        "updated_at": "2026-11-19 14:30:00"
+    },
+    "ZS": {
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 214.58,
+        "initial_stop": 202.78,
+        "initial_risk": 11.8,
+        "tp1": 232.28,
+        "tp2": 249.98,
+        "initial_qty": 0.5954,
+        "peak_price": 214.58,
         "tp1_hit": false,
         "breakeven_active": false,
         "fractional_managed": true,
-        "last_stop_price": 182.78,
-        "updated_at": "2026-11-18 20:07:48"
+        "last_stop_price": 202.78,
+        "updated_at": "2026-11-19 14:45:27"
     }
 }
