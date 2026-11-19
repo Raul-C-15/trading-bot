@@ -292,5 +292,19 @@
         "result": "WIN",
         "exit_type": "TAKE_PROFIT",
         "closed_at": "2026-11-19 14:30:00"
+    },
+    {
+        "id": "TR_0022",
+        "alpaca_order_id": "7ed8735b-4574-4925-a28b-8b6e58bdee92",
+        "ticker": "ANET",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 193.25,
+        "exit_price": 193.3,
+        "shares": 0.2338,
+        "pnl": 0.01,
+        "pnl_pct": 0.03,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-19 15:33:26"
     }
 ]
