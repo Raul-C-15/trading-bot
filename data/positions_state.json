@@ -85,21 +85,6 @@
         "last_stop_price": 372.07,
         "updated_at": "2026-11-18 18:49:58"
     },
-    "ANET": {
-        "setup_type": "PULLBACK_EMA20",
-        "entry_price": 193.42,
-        "initial_stop": 182.78,
-        "initial_risk": 10.64,
-        "tp1": 209.38,
-        "tp2": 225.34,
-        "initial_qty": 0.2338,
-        "peak_price": 199.62,
-        "tp1_hit": false,
-        "breakeven_active": true,
-        "fractional_managed": true,
-        "last_stop_price": 193.54,
-        "updated_at": "2026-11-19 14:30:00"
-    },
     "ZS": {
         "setup_type": "PULLBACK_EMA20",
         "entry_price": 214.58,
