@@ -348,5 +348,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-19 17:06:12"
+    },
+    {
+        "id": "TR_0026",
+        "alpaca_order_id": "de4571ba-ef2a-47a1-8e8a-7c62e12b20f8",
+        "ticker": "ZS",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 214.0,
+        "exit_price": 201.72,
+        "shares": 0.5954,
+        "pnl": -7.31,
+        "pnl_pct": -5.74,
+        "result": "LOSS",
+        "exit_type": "STOP_LOSS",
+        "closed_at": "2026-11-20 14:32:01"
     }
 ]
