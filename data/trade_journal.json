@@ -362,5 +362,19 @@
         "result": "LOSS",
         "exit_type": "STOP_LOSS",
         "closed_at": "2026-11-20 14:32:01"
+    },
+    {
+        "id": "TR_0027",
+        "alpaca_order_id": "c43a0e97-7a37-4d9a-8fa7-a24406fa50d4",
+        "ticker": "AAPL",
+        "setup_type": "PULLBACK_EMA20",
+        "entry_price": 343.64,
+        "exit_price": 344.11,
+        "shares": 0.5384,
+        "pnl": 0.25,
+        "pnl_pct": 0.14,
+        "result": "WIN",
+        "exit_type": "TAKE_PROFIT",
+        "closed_at": "2026-11-20 19:24:49"
     }
 ]
