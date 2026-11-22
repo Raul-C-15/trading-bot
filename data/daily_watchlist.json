@@ -1,30 +1,29 @@
 {
-  "date": "2026-11-20",
-  "updated_at": "2026-11-20 13:58",
+  "date": "2026-11-22",
+  "updated_at": "2026-11-22 20:33",
   "count": 35,
   "hot_sectors": [
-    "CYBERSECURITY (RS: +25.0%)",
-    "SOFTWARE_CLOUD (RS: +14.5%)",
-    "FINANCIALS (RS: +15.3%)"
+    "CYBERSECURITY (RS: +27.6%)",
+    "FINANCIALS (RS: +19.4%)",
+    "SOFTWARE_CLOUD (RS: +13.9%)"
   ],
   "sector_avg_rs": {
-    "SOFTWARE_CLOUD": 14.49,
-    "HIGH_BETA_GROWTH": 12.19,
-    "CYBERSECURITY": 25.0,
-    "FINANCIALS": 15.32
+    "SOFTWARE_CLOUD": 13.91,
+    "CYBERSECURITY": 27.61,
+    "HIGH_BETA_GROWTH": 15.0,
+    "FINANCIALS": 19.37
   },
   "top_rs_added": [
-    "S",
     "MA",
     "V",
     "ABNB"
   ],
   "top_5_rs": [
-    "S (+25.0%)",
-    "CRWD (+23.6%)",
-    "APP (+19.6%)",
-    "AAPL (+14.5%)",
-    "PANW (+16.4%)"
+    "ZS (+27.6%)",
+    "AAPL (+13.9%)",
+    "APP (+13.1%)",
+    "MA (+20.3%)",
+    "V (+18.4%)"
   ],
   "sectors": {
     "CYBERSECURITY": 4,
@@ -35,14 +34,12 @@
     "AI_POWER_INFRA": 5
   },
   "watchlist": [
-    "S",
-    "CRWD",
-    "APP",
+    "ZS",
     "AAPL",
-    "PANW",
+    "APP",
     "MA",
-    "SPOT",
     "V",
+    "SPOT",
     "ABNB",
     "NVDA",
     "AVGO",
@@ -64,6 +61,8 @@
     "NOW",
     "SNOW",
     "CRM",
+    "CRWD",
+    "PANW",
     "NET",
     "VRT",
     "VST",
