@@ -111,11 +111,25 @@ def run_automated_scan(trader: AlpacaTrader):
     except Exception as e:
         print(f"[{now_str}] ⚠️ Eroare Position Manager: {e}")
 
-    # 1. Verificare Regim de Piata Multi-Tier (SPY + QQQ + VIX)
+    # 1. Verificare Kill-Switch Automat (Pierdere Zilnica / Drawdown Maxim)
+    ks_active, ks_msg = trader.check_kill_switch()
+    if ks_active:
+        print(f"[{now_str}] {ks_msg}")
+        if ALERTED_TODAY.get("_KILL_SWITCH_") != today_str:
+            send_telegram_message(ks_msg)
+            ALERTED_TODAY["_KILL_SWITCH_"] = today_str
+            save_telegram_state(alerted_today=ALERTED_TODAY)
+        return 0
+
+    # 1.5. Verificare Regim de Piata Multi-Tier pe lumanari inchise (SPY + QQQ + VIX)
     try:
         market = fetch_market_regime(config.BENCHMARK_TICKER)
         if not market["is_bullish"]:
-            print(f"[{now_str}] ⚠️ Piata este BEARISH (SPY=${market['price']} sub SMA 200=${market['sma_200']}). Nu se deschid pozitii.")
+            print(
+                f"[{now_str}] ⚠️ Piata este in regim defensiv BEARISH "
+                f"(SPY=${market['price']} | SMA50=${market.get('sma_50', 0)} | SMA200=${market['sma_200']} | VIX={market.get('vix', 0)}). "
+                f"Capital protejat 100% in Cash."
+            )
             return 0
         regime = market.get("regime", "POWER_TREND")
         risk_mult = market.get("risk_multiplier", 1.0)
@@ -125,26 +139,27 @@ def run_automated_scan(trader: AlpacaTrader):
         print(f"[{now_str}] Eroare Regim Piata: {e}")
         return 0
 
-    # 2. Scanare actiuni
+    # 2. Scanare actiuni pe lumanari zilnice complet inchise ('closed')
     summary = trader.get_portfolio_summary()
     capital = summary["portfolio_value"]
 
-    # Verificare pozitii deja deschise pentru a nu dubla acelasi ticker si pentru diversificare pe sectoare
+    # Verificare idempotenta: pozitii deschise SI ordine BUY in asteptare ('open' / 'pending')
     open_positions = trader.get_open_positions()
-    open_symbols = {p["symbol"] for p in open_positions}
+    open_buy_orders = trader.get_open_buy_orders()
+    open_symbols = {p["symbol"] for p in open_positions} | {o.symbol for o in open_buy_orders}
     sector_exposure = {}
-    for p in open_positions:
-        sec = config.get_ticker_sector(p["symbol"])
+    for sym in open_symbols:
+        sec = config.get_ticker_sector(sym)
         sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
 
     buy_signals = []
 
     for ticker in config.WATCHLIST:
         if ticker in open_symbols:
-            continue  # Deja avem pozitie deschisa pe acest simbol
+            continue
 
         try:
-            df = fetch_stock_data(ticker)
+            df = fetch_stock_data(ticker, closed_only=True)
             signal = analyze_ticker(
                 ticker=ticker,
                 df=df,
@@ -161,34 +176,36 @@ def run_automated_scan(trader: AlpacaTrader):
         except Exception as e:
             print(f"[{now_str}] Eroare evaluare {ticker}: {e}")
 
-    # 3. Sortam semnalele descrescator dupa Scorul Compozit de Atac (Sector Alpha + ML + RS + News)
+    # 3. Sortam semnalele descrescator dupa Scorul Compozit de Calitate (RS/ATR + VCP + Sector)
     if buy_signals:
         buy_signals.sort(key=lambda s: getattr(s, "composite_score", 0.0), reverse=True)
+        max_total_pos = int(getattr(config, "MAX_TOTAL_POSITIONS", config.MAX_OPEN_POSITIONS + 1))
 
         for signal in buy_signals:
             ticker = signal.ticker
             sec = getattr(signal, "sector", config.get_ticker_sector(ticker))
-            max_per_sector = config.get_sector_max_positions(sec) if hasattr(config, "get_sector_max_positions") else getattr(config, "MAX_POSITIONS_PER_SECTOR", 2)
+            max_per_sector = config.get_sector_max_positions(sec)
             ml_conf = getattr(signal, "ml_confidence", 0.0)
             rs_val = getattr(signal, "rs_score", 0.0)
             comp_val = getattr(signal, "composite_score", 0.0)
             news_lbl = getattr(signal, "news_sentiment", "⚪ NEUTRU")
-            ml_log = f" | Sector: {sec} | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | News: {news_lbl} | Scor Atac: {comp_val:.0f}/100"
-            print(f"[{now_str}] 🎯 Semnal BUY gasit: {ticker} @ ${signal.entry_price}{ml_log}")
+            ml_log = f" | Sector: {sec} | ML: {ml_conf*100:.1f}% | RS: {rs_val:+.1f}% | News: {news_lbl} | Scor: {comp_val:.0f}/100"
+            print(f"[{now_str}] 🎯 Semnal BUY gasit: {ticker} @ Limit ${signal.entry_price}{ml_log}")
 
-            # Verificare Limita de Concentrare pe Sector (ex: pana la 3 pozitii pe SEMICONDUCTORS/SOFTWARE_CLOUD, 0 pe HEALTHCARE)
             if sector_exposure.get(sec, 0) >= max_per_sector:
                 print(
                     f"[{now_str}] 🏢 SECTOR CAP: Sectorul {sec} are deja {sector_exposure.get(sec, 0)}/{max_per_sector} "
-                    f"pozitii permise. Se omite {ticker} pentru concentrarea capitalului pe liderii principali."
+                    f"pozitii/ordine. Se omite {ticker}."
                 )
                 continue
 
-            # Verificare Portfolio Heat daca AUTO_TRADE este activ
+            if len(open_symbols) >= max_total_pos:
+                print(f"[{now_str}] 🛡️ Plafon total pozitii atins ({len(open_symbols)}/{max_total_pos}). Se omite {ticker}.")
+                continue
+
             active_risk_count = trader.get_active_risk_positions_count()
             can_auto_execute = bool(config.AUTO_TRADE and active_risk_count < max_pos_allowed)
 
-            # Deduplicare alerta: trimitem cel mult o alerta pe zi pentru acelasi simbol
             if ALERTED_TODAY.get(ticker) != today_str:
                 send_trade_alert(signal, with_buttons=not can_auto_execute, is_power_hour=power_hour)
                 ALERTED_TODAY[ticker] = today_str
@@ -196,7 +213,6 @@ def run_automated_scan(trader: AlpacaTrader):
             else:
                 print(f"[{now_str}] ℹ️ Alerta Telegram pentru {ticker} a fost deja trimisa astazi ({today_str}).")
 
-            # Daca este activat AUTO_TRADE, plaseaza ordinul direct (in ordinea scorului si in limita Portfolio Heat + Sector Cap)
             if config.AUTO_TRADE:
                 if active_risk_count >= max_pos_allowed:
                     print(
@@ -205,7 +221,7 @@ def run_automated_scan(trader: AlpacaTrader):
                     )
                     continue
 
-                print(f"[{now_str}] 🤖 AUTO-TRADE ACTIVAT: Se plaseaza ordinul pentru {ticker} ({sec})...")
+                print(f"[{now_str}] 🤖 AUTO-TRADE ACTIVAT: Se plaseaza ordinul Limit pentru {ticker} ({sec})...")
                 res = trader.place_bracket_buy_order(
                     symbol=signal.ticker,
                     qty=signal.shares,
@@ -213,9 +229,11 @@ def run_automated_scan(trader: AlpacaTrader):
                     stop_loss_price=signal.stop_loss,
                     take_profit_price=signal.tp1,
                     tp2_price=signal.tp2,
-                    setup_type=signal.setup_type
+                    setup_type=signal.setup_type,
+                    signal_date=getattr(signal, "signal_date", "")
                 )
                 if res:
+                    open_symbols.add(ticker)
                     sector_exposure[sec] = sector_exposure.get(sec, 0) + 1
                     active_risk_count += 1
         sync_state_to_git()
@@ -471,7 +489,7 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     while (time.time() - session_start) < max_seconds:
         if trader.is_connected and trader.client:
             try:
-                clock = trader.client.get_clock()
+                clock = trader._api_call(trader.client.get_clock)
                 market_time = clock.timestamp
             except Exception as e:
                 print(f"⚠️ Eroare citire ceas Alpaca: {e}")
@@ -546,10 +564,11 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
             if ALERTED_TODAY.get("_PREMARKET_SENT_") != today_str:
                 run_premarket_briefing(trader)
 
-            # Buffer de protectie primele 15 minute (9:30 - 9:45 ET / 16:30 - 16:45 RO)
-            if market_time.hour == 9 and market_time.minute < 45:
-                wait_min = 45 - market_time.minute
-                print(f"⏳ Buffer de Deschidere (9:30 - 9:45 ET): Asteptare {wait_min} min (Telegram si Position Manager active)...")
+            # Buffer de protectie la deschidere (config.MARKET_OPEN_BUFFER_MINUTES, ex: 9:30 - 9:45 ET)
+            open_buf_end = 30 + int(getattr(config, "MARKET_OPEN_BUFFER_MINUTES", 15))
+            if market_time.hour == 9 and market_time.minute < open_buf_end:
+                wait_min = open_buf_end - market_time.minute
+                print(f"⏳ Buffer de Deschidere (9:30 - 9:{open_buf_end:02d} ET): Asteptare {wait_min} min pt stabilizare spread...")
                 try:
                     from position_manager import run_position_manager
                     run_position_manager(trader)
@@ -571,7 +590,7 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
 
             if trader.is_connected and trader.client:
                 try:
-                    clock = trader.client.get_clock()
+                    clock = trader._api_call(trader.client.get_clock)
                     if not clock.is_open:
                         run_eod_report(trader)
                         listener.stop()

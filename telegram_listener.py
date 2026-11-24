@@ -409,7 +409,8 @@ class TelegramListener:
                     stop_loss_price=signal.stop_loss,
                     take_profit_price=signal.tp1,
                     tp2_price=getattr(signal, "tp2", None),
-                    setup_type=getattr(signal, "setup_type", "PULLBACK_EMA20")
+                    setup_type=getattr(signal, "setup_type", "PULLBACK_EMA20"),
+                    signal_date=getattr(signal, "signal_date", "")
                 )
 
                 if order:

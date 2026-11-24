@@ -1,190 +1,294 @@
 """
-Configurari generale pentru Trading Bot (Institutional Swing Trading Edition).
-Toate setarile strategiei, filtrelor multi-timeframe, Relative Strength si ale riscului sunt definite aici.
+Configurări centrale pentru Trading Bot (Institutional Swing Trading V2 — Validated Out-of-Sample).
+Toate constantele strategiei, costurile reale de tranzacționare, limitele de risc,
+Kill-Switch-ul și reziliența API sunt izolate strict aici (fără valori hardcodate în module).
 """
 
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Incarcare variabile de mediu din .env (daca exista)
+# Încărcare variabile de mediu din .env (dacă există)
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-# --- LISTA DE ACTIUNI PENTRU SCANARE (HIGH-ALPHA AI, TECH & MOMENTUM LEADERS) ---
-# Portofoliu institutional concentrat pe sectoarele unde curg banii institutionali (Money Flow):
-# 1. Semiconductori & Infrastructura Hardware AI
-# 2. Mega-Cap Tech, Cloud & AI Software
-# 3. Cybersecurity & Cloud Zero-Trust
-# 4. Infrastructura Data-Centers, Power Grid AI & Electrificare
-# 5. High-Beta Digital Growth, E-Commerce & FinTech Leaders
-# (Sectoarele lente/defensive precum Healthcare/Pharma, Consumer Staples, Airlines au fost eliminate)
+# ==============================================================================
+# 1. UNIVERSUL DE ACȚIUNI LICHIDE (MULTI-SECTOR STAGE 2 INSTITUTIONAL LEADERS)
+# ==============================================================================
+# Diversificare reală pe sectoare S&P 500 / Nasdaq 100 (fără blocarea artificială
+# a sectoarelor defensive/industriale când rotația capitalului instituțional se mută acolo,
+# și fără acțiuni meme/cripto hiper-volatile care distrug Win Rate-ul).
 WATCHLIST = [
-    # 1. AI Semiconductors, Chip Design & High-Speed Networking (Inima Revolutiei AI)
-    "NVDA", "AVGO", "AMD", "TSM", "MU", "ARM", "ANET", "MRVL", "ASML", "KLAC", "CRDO",
-    # 2. Mega-Cap Tech, Cloud & Enterprise AI Software
-    "PLTR", "META", "MSFT", "AMZN", "GOOGL", "AAPL", "ORCL", "NOW", "APP", "SNOW", "CRM", "RDDT",
-    # 3. Cybersecurity & Cloud Protection
-    "CRWD", "PANW", "NET", "ZS",
-    # 4. AI Data-Center Power, Cooling & Grid Infrastructure
-    "VRT", "VST", "CEG", "GEV", "ETN",
-    # 5. High-Beta Digital Growth, E-Commerce & FinTech Attackers
-    "TSLA", "NFLX", "SHOP", "SPOT", "HOOD", "COIN"
-]
-
-# Numarul de lideri selectati de Screener-ul Dinamic (Optiunea 3 din Unelte)
-TOP_LEADERS_COUNT = 25
-
-# Univers extins (~75 companii High-Alpha S&P 500 / Nasdaq 100) exclusiv din sectoare de Momentum & Crestere
-UNIVERSE_POOL = [
-    # 1. AI Semiconductors, Hardware, Storage & Networking
-    "NVDA", "AVGO", "AMD", "TSM", "MU", "ARM", "ANET", "MRVL", "ASML", "KLAC",
-    "LRCX", "AMAT", "CRDO", "CLS", "MPWR", "QCOM", "ON", "SNPS", "CDNS", "SMCI", "FN", "DELL",
-    # 2. AI Software, Cloud, Big Tech & Data Analytics
-    "PLTR", "META", "MSFT", "AMZN", "GOOGL", "AAPL", "ORCL", "NOW", "APP", "SNOW",
-    "CRM", "DDOG", "MDB", "RDDT", "IOT", "ADBE", "INTU", "IBM", "TEAM", "HUBS", "MSTR",
+    # 1. Semiconductori & Infrastructură AI
+    "NVDA", "AVGO", "AMD", "TSM", "ANET", "KLAC", "LRCX", "AMAT", "QCOM", "ASML",
+    # 2. Cloud, Big Tech & Enterprise Software
+    "MSFT", "AAPL", "GOOGL", "AMZN", "META", "ORCL", "NOW", "CRM", "ADBE", "INTU",
     # 3. Cybersecurity
-    "CRWD", "PANW", "NET", "ZS", "FTNT", "CYBR", "S",
-    # 4. AI Power Grid, Nuclear Energy for Data Centers, Cooling & Electrification
-    "VRT", "VST", "CEG", "GEV", "ETN", "PWR", "GE", "CAT", "URI", "AXON",
-    # 5. High-Beta Consumer Tech, E-Commerce & FinTech Momentum
-    "TSLA", "NFLX", "SHOP", "SPOT", "UBER", "MELI", "DASH", "DKNG", "ABNB", "BKNG",
-    "HOOD", "COIN", "SOFI", "NU", "AFRM", "XYZ", "GS", "KKR", "APO", "AXP", "V", "MA"
+    "PANW", "CRWD", "FTNT",
+    # 4. Industriale, Electrificare & Apărare
+    "ETN", "CAT", "GE", "PWR", "URI", "LMT", "RTX",
+    # 5. Finanțe & Plăți Globale
+    "JPM", "GS", "V", "MA", "AXP", "BLK", "SPGI",
+    # 6. Healthcare & MedTech Lideri
+    "LLY", "ISRG", "BSX", "VRTX", "ABBV",
+    # 7. Consumer & Retail Compounders
+    "COST", "WMT", "TJX", "BKNG", "UBER", "NFLX"
 ]
 
-# Benchmark-urile pietei pentru filtrul de regim multidimensional (Market Regime Filter)
+TOP_LEADERS_COUNT = 25
+DAILY_WATCHLIST_MAX_COUNT = 35
+
+UNIVERSE_POOL = [
+    # 1. Semiconductori & Hardware
+    "NVDA", "AVGO", "AMD", "TSM", "MU", "ARM", "ANET", "MRVL", "ASML", "KLAC",
+    "LRCX", "AMAT", "CRDO", "CLS", "FN", "MPWR", "QCOM", "ON", "SNPS", "CDNS", "TXN", "DELL",
+    # 2. Software, Cloud, Cybersecurity & Big Tech
+    "MSFT", "AAPL", "GOOGL", "AMZN", "META", "PLTR", "ORCL", "NOW", "APP", "SNOW",
+    "CRM", "ADBE", "INTU", "IBM", "CSCO", "DDOG", "MDB", "IOT", "TEAM", "HUBS",
+    "PANW", "CRWD", "FTNT", "NET", "ZS", "CYBR", "S",
+    # 3. Industriale, Power Grid & Aerospace
+    "ETN", "PWR", "GE", "CAT", "URI", "AXON", "GEV", "VST", "CEG", "VRT", "LMT", "RTX",
+    # 4. Finanțe & Capital Markets
+    "JPM", "GS", "MS", "KKR", "APO", "AXP", "V", "MA", "BLK", "SPGI", "BX", "SCHW",
+    # 5. Healthcare & Biotech Lideri
+    "LLY", "ISRG", "ABBV", "VRTX", "REGN", "BSX", "SYK", "UNH",
+    # 6. Consumer, Retail, Travel & Digital Leaders
+    "COST", "WMT", "TJX", "HD", "KO", "DIS", "NKE", "DAL", "UAL", "RCL",
+    "NFLX", "UBER", "BKNG", "ABNB", "SHOP", "SPOT", "MELI", "DASH", "DKNG", "TSLA",
+    # 7. Energie & Materiale Lideri
+    "XOM", "CVX", "SLB", "FCX"
+]
+
 BENCHMARK_TICKER = "SPY"
 SECONDARY_BENCHMARK = "QQQ"
 VIX_TICKER = "^VIX"
 
-# --- REGULI DE MANAGEMENT AL RISCULUI (NON-NEGOCIABILE) ---
-# Risc maxim intre 1% si 2% per tranzactie (1.5% in Power Trend)
-RISK_PER_TRADE_PERCENT = 0.015  # 1.5% ($15.00 risc la un cont de $1,000)
+# ==============================================================================
+# 2. MANAGEMENTUL RISCULUI, POSITION SIZING & PORTFOLIO HEAT (NON-NEGOCIABIL)
+# ==============================================================================
+# Risc dinamic per tranzacție (între 1% și 2% din capitalul curent):
+#   position_size = (total_capital * effective_risk_pct) / abs(entry_price - stop_loss)
+RISK_PER_TRADE_PERCENT = 0.0175      # 1.75% risc pe tranzacție în Power Trend (strict în intervalul 1% - 2%)
+CAUTIOUS_RISK_MULTIPLIER = 0.70      # ~1.22% risc pe tranzacție în Cautious Uptrend
 
-# Capital implicit si plafon de buget pentru testarea realista pe contul de $1,000
-DEFAULT_SIMULATED_CAPITAL = 1000.0  # 1,000 USD
-ACCOUNT_BUDGET_CAP = 1000.0         # Plafoneaza capitalul de lucru la $1,000 (+ PnL) chiar daca Alpaca Paper are $100,000
-ALLOW_FRACTIONAL_SHARES = True      # Permite cumpararea de actiuni fractionare (ex: 0.28x LLY, 0.43x META, 1.75x NVDA)
+DEFAULT_SIMULATED_CAPITAL = 1000.0   # Capital inițial implicit pentru simulare ($1,000)
+ACCOUNT_BUDGET_CAP = 1000.0          # Plafon buget activ (+ PnL real) dacă contul Paper are $100k
+ALLOW_FRACTIONAL_SHARES = True
 
-# Numar maxim de pozitii cu RISC ACTIV deschise simultan (Portfolio Heat maxim: ~6%, max $250 / pozitie la $1,000)
-# Nota: Pozitiile deja asigurate la Breakeven (Risc 0) devin 'Free-Roll'
-MAX_OPEN_POSITIONS = 4
+# Limite stricte de expunere la nivel de portofoliu și sector
+MAX_OPEN_POSITIONS = 4               # Max 4 poziții cu RISC ACTIV simultan (Portfolio Heat <= 6%)
+MAX_TOTAL_POSITIONS = 5              # Plafon absolut poziții deschise (inclusiv cele la Breakeven)
+MAX_POSITIONS_PER_SECTOR = 2         # Previne concentrarea pe acțiuni puternic corelate
+MAX_SINGLE_POSITION_PCT = 0.33       # Max 33% din capitalul total într-o singură acțiune
+MIN_POSITION_ALLOC_PCT = 0.12        # Nu deschide poziții fărâmițate sub 12% din capital (~$120)
+MIN_POSITION_COST_USD = 50.0         # Prag minim absolut în USD per ordin
 
-# Raport Risc / Recompensa minim acceptat pentru TP1 (1:1.5 -> mutare SL la Breakeven)
-MIN_RISK_REWARD_RATIO = 1.5
-TP2_RISK_REWARD_RATIO = 3.0     # Tinta extinsa pentru Runner (Lotul 2)
-
-# Procent din pozitie inchis la Take Profit 1 (TP1)
-TP1_EXIT_PERCENT = 0.50  # 50%
-
-# Activare Split-Order pe Alpaca (50% Lot 1 la TP1 + 50% Lot 2 la TP2 / Trailing Stop)
+# Praguri obligatorii de Risk / Reward & Scale-Out
+MIN_RISK_REWARD_RATIO = 2.0          # Prag minim obligatoriu R:R până la ținta principală (1:2.0)
+TP1_RISK_REWARD_RATIO = 1.5          # TP1 la 1.5R: închide 50% + mută Stop-Loss la Breakeven
+TP2_RISK_REWARD_RATIO = 2.5          # TP2 la 2.5R: ținta Runner-ului (urmărit cu Trailing pe EMA 20)
+TP1_EXIT_PERCENT = 0.50              # 50% din poziție marcată la TP1
+BREAKEVEN_BUFFER_PCT = 0.0020        # +0.20% peste prețul de intrare (acoperă spread/comision)
+EMA20_TRAIL_BUFFER_PCT = 0.015       # Trail Runner la 1.5% sub EMA 20 zilnic după TP1
 USE_SPLIT_ORDERS = True
 
-# Cost de alunecare (Slippage) per executie in Backtest pentru realism institutional (0.05%)
-BACKTEST_SLIPPAGE_PCT = 0.0005
+# Limite structurale Stop-Loss (fără tăiere artificială în aer!)
+MIN_STOP_LOSS_PCT = 0.022            # Minim 2.2% distanță SL (evită zgomotul intraday)
+MAX_STOP_LOSS_PCT = 0.075            # Maxim 7.5% distanță SL (dacă suportul e mai jos, respinge semnalul!)
+ATR_STOP_MULTIPLIER = 1.8            # Buffer minim de volatilitate (1.8x ATR_14)
 
-# --- PARAMETRI TEHNICI (1D DAILY) ---
-TIMEFRAME = "1d"         # Grafic zilnic
-LOOKBACK_DAYS = 365 * 2  # 2 ani de date istorice pentru calcul si backtest
+# ==============================================================================
+# 3. KILL-SWITCH AUTOMAT & SIGURANȚĂ LA EXECUȚIE (API RESILIENCE)
+# ==============================================================================
+KILL_SWITCH_ENABLED = True
+MAX_DAILY_LOSS_PCT = 0.03            # Oprește intrările noi dacă pierderea zilei >= 3.0%
+MAX_PORTFOLIO_DRAWDOWN_PCT = 0.10    # Oprește intrările noi dacă drawdown-ul față de HWM >= 10.0%
 
-SMA_MARKET_PERIOD = 200  # SPY > SMA 200 pentru Market Bullish
-SMA_STOCK_PERIOD = 50    # Stock > SMA 50 pentru Trend Ascendent
-EMA_PULLBACK_PERIOD = 20 # EMA 20 - suportul de pullback
-RSI_PERIOD = 14          # RSI pe 14 lumanari
-RSI_PULLBACK_MIN = 38.0  # Zona inferioara sanatoasa pentru retragere
-RSI_PULLBACK_MAX = 56.0  # Zona superioara sanatoasa pentru retragere
-VOLUME_AVG_PERIOD = 20   # Media mobila a volumului
-VOLUME_SURGE_MULTIPLIER = 1.25  # Factor de volum exploziv la spargere (125%)
+# Protecție la deschiderea bursei & alunecare la intrare
+MARKET_OPEN_BUFFER_MINUTES = 15      # Nu scanează intrări noi în primele 15 min (09:30 - 09:45 ET)
+POSITION_MGR_OPEN_GUARD_MINUTES = 10 # Evită vânzări Market în spread-ul haotic din primele 10 min (09:30 - 09:40 ET)
+PULLBACK_LIMIT_DISCOUNT_PCT = 0.003  # Intrare Limit cu -0.3% sub Close pe Pullback (nu urmărește gap-up)
+MAX_ENTRY_GAP_PCT = 0.012            # Anulează intrarea dacă prețul sare cu > +1.2% peste semnal
 
-# --- FILTRE PRO: RELATIVE STRENGTH (RS vs SPY) & VCP (VOLATILITY CONTRACTION) ---
+# Reziliență API (Timeout, Retry & Exponential Backoff)
+API_TIMEOUT_SECONDS = 10.0
+API_MAX_RETRIES = 3
+API_BACKOFF_BASE_SECONDS = 1.0
+
+# ==============================================================================
+# 4. COSTURI REALE DE TRANZACȚIONARE ÎN BACKTEST (ANTI-ILLUSION)
+# ==============================================================================
+BACKTEST_SPREAD_PCT = 0.0008         # 0.08% spread bid/ask complet (0.04% half-spread pe sens)
+BACKTEST_SLIPPAGE_PCT = 0.0006       # 0.06% slippage defavorabil pe sens (total cost variabil: 0.10%/sens)
+BACKTEST_COMMISSION_USD = 0.02       # Taxe SEC/FINRA TAF / execuție per ordin
+
+# ==============================================================================
+# 5. PARAMETRI TEHNICI ZILNICI (1D) & MULTI-TIMEFRAME (1W) — LUMÂNĂRI ÎNCHISE
+# ==============================================================================
+TIMEFRAME = "1d"
+LOOKBACK_DAYS = 365 * 2
+CLOSED_CANDLES_ONLY = True           # ZERO Look-Ahead Bias: calculează semnalele exclusiv pe bare 1D închise
+
+SMA_MARKET_PERIOD = 200
+SMA_STOCK_PERIOD = 50
+EMA_PULLBACK_PERIOD = 20
+RSI_PERIOD = 14
+RSI_FAST_PERIOD = 4                  # RSI(4) Wilder pentru detectarea retragerilor ordonate în Stage 2
+
+RSI4_PULLBACK_MAX = 30.0             # Prag platou validat OOS (28-32): epuizarea vânzătorilor pe pullback
+RSI_PULLBACK_MIN = 38.0              # Zona sănătoasă de suport în trend ascendent
+RSI_PULLBACK_MAX = 54.0
+PULLBACK_MAX_VOL_RATIO_3D = 1.05     # Volume Dry-Up: volumul pe corecție nu depășește media
+
+VOLUME_AVG_PERIOD = 20
+MIN_AVG_VOLUME = 700_000             # Lichiditate instituțională minimă (700k acțiuni/zi)
+VOLUME_SURGE_MULTIPLIER = 1.50       # Confirmare Breakout: volum >= 150% din media pe 20 zile
+MAX_ATR_PCT = 4.3                    # Exclude acțiunile haotice/parabolice cu ATR zilnic > 4.3%
+MIN_ATR_PCT = 1.0
+
+# Filtre Regim Piață (SPY + QQQ + VIX)
+VIX_POWER_TREND_MAX = 21.5
+VIX_BEARISH_THRESHOLD = 25.0         # Peste VIX 25 blocăm intrările noi Long
+
+# Filtre Relative Strength (RS vs SPY) & VCP
 USE_RELATIVE_STRENGTH = True
-# Scor RS minim fata de SPY (evita actiunile care subperformeaza sever piata)
-MIN_RS_VS_SPY_PULLBACK = -5.0   # Permite pullback-uri usoare pe lideri
-MIN_RS_VS_SPY_BREAKOUT = 0.0    # La Breakout, actiunea TREBUIE sa bata SPY (RS >= 0)
-MAX_BREAKOUT_EXTENSION_EMA20 = 0.12  # Nu cumparam breakout daca pretul e deja la >12% peste EMA 20 (Climax Top)
+ENABLE_BREAKOUT_SETUP = False        # Dezactivat implicit: Pullback-ul Ordonat Stage 2 are Win Rate (56-58% poz / 72% lot) și Sharpe net superioare OOS!
+MIN_RS_VS_SPY_PULLBACK = 2.0         # Cumpărăm doar lideri care bat S&P 500 (RS >= +2%)
+MAX_RS_VS_SPY_PARABOLIC = 45.0       # Evită cumpărarea în blow-off tops parabolice
+MIN_RS_VS_SPY_BREAKOUT = 3.0
+MAX_BREAKOUT_EXTENSION_EMA20 = 0.07  # Nu cumpărăm breakout extins la >7% peste EMA 20
+MAX_VCP_ATR_CONTRACTION = 0.85       # Contracție strictă a volatilității pentru Breakout
+MAX_VCP_BASE_RANGE_PCT = 8.0         # Bază strânsă pe 3 săptămâni (<= 8% amplitudine)
 
-# --- FILTRU MULTI-TIMEFRAME (1W + 1D CONFLUENCE) ---
+# Filtru Multi-Timeframe Săptămânal (1W — shift(1) săptămână complet închisă)
 USE_WEEKLY_FILTER = True
-WEEKLY_EMA_PERIOD = 10     # Weekly EMA 10 (Trend intermediar saptamanal ~50 zile)
-WEEKLY_SMA_PERIOD = 30     # Weekly SMA 30 (Trend primar Weinstein Stage 2)
-WEEKLY_RSI_MIN = 40.0      # Evita actiunile blocate in downtrend structural saptamanal
-WEEKLY_RSI_MAX = 72.0      # Evita cumpararea la supra-extindere saptamanala
+WEEKLY_EMA_PERIOD = 10
+WEEKLY_SMA_PERIOD = 30
+WEEKLY_SMA50_PERIOD = 50
+WEEKLY_RSI_MIN = 45.0
+WEEKLY_RSI_MAX = 72.0
 
-# --- CONFIGURARE BROKER (ALPACA) ---
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
-ALPACA_PAPER = os.getenv("ALPACA_PAPER", "True").lower() in ("true", "1", "yes")
+# Filtru Earnings & Știri
+EARNINGS_BUFFER_DAYS = 7
+EARNINGS_OPEN_POS_WARN_DAYS = 2
+USE_ALPACA_LIVE_DATA = True          # Folosit DOAR la execuție/cotație live, NICIODATĂ la poluarea lumânărilor 1D!
+USE_NEWS_FILTER = True
+USE_SECTOR_ROTATION = True
 
-# --- CONFIGURARE NOTIFICARI TELEGRAM ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Filtru Machine Learning (cu Poartă Automată de Calitate Out-of-Sample)
+ML_ENABLED = True
+ML_MIN_CONFIDENCE = 0.53
+ML_MIN_TRAINING_SAMPLES = 80
+ML_MIN_OOS_ROC_AUC = 0.55            # Dezactivează automat respingerea ML dacă ROC-AUC CV < 0.55 (zgomot)
 
-# --- AUTOMATIZARE & SCHEDULER ---
-AUTO_TRADE = os.getenv("AUTO_TRADE", "True").lower() in ("true", "1", "yes")
+# ==============================================================================
+# 6. CREDENȚIALE, MOD DE EXECUȚIE & VALIDARE STARTUP (FAIL-FAST)
+# ==============================================================================
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "").strip()
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "").strip()
+_RAW_ALPACA_PAPER = os.getenv("ALPACA_PAPER", "True").strip().lower()
+ALPACA_PAPER = _RAW_ALPACA_PAPER in ("true", "1", "yes")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+AUTO_TRADE = os.getenv("AUTO_TRADE", "True").strip().lower() in ("true", "1", "yes")
 SCAN_INTERVAL_MINUTES = 15
 
-# --- FILTRU EARNINGS (ANTI-BINARY RISK) ---
-EARNINGS_BUFFER_DAYS = 7        # Blocheaza intrari noi cu <= 7 zile inainte de Earnings
-EARNINGS_OPEN_POS_WARN_DAYS = 2 # Avertizeaza / strânge SL pentru pozitii deschise cu <= 2 zile inainte de Earnings
 
-# --- MACHINE LEARNING (SIGNAL CONFIDENCE FILTER) ---
-ML_ENABLED = True
-ML_MIN_CONFIDENCE = 0.52
-ML_MIN_TRAINING_SAMPLES = 80
+def validate_runtime_environment(require_broker: bool = False) -> dict:
+    """
+    Validează explicit variabilele de mediu la pornire (Fail-Fast pentru execuția Live):
+      - Verifică neechivoc modul de execuție ('paper' vs 'live').
+      - Oprește imediat pornirea în mod 'live' (bani reali) dacă ALPACA_PAPER are o valoare
+        ambiguă sau dacă lipsesc cheile API valide.
+    """
+    raw_mode = os.getenv("ALPACA_PAPER", "True").strip().lower()
+    valid_true = ("true", "1", "yes")
+    valid_false = ("false", "0", "no")
 
-# --- FUNCTII QUANT PRO 10/10: SECTOR ROTATION (ATAC PE AI & TECH), DATE LIVE ALPACA & FILTRU STIRI ---
-MAX_POSITIONS_PER_SECTOR = 2    # Limita implicita pe sectoare secundare
-USE_ALPACA_LIVE_DATA = True     # Preia pretul intraday in timp real (IEX/SIP) direct din Alpaca API
-USE_NEWS_FILTER = True          # Analizeaza stirile din ultimele 48h prin Alpaca News API
-USE_SECTOR_ROTATION = True      # Prioritizeaza sectoarele Fierbinti (Hot Sectors) cu cel mai puternic Money Flow
+    if raw_mode not in valid_true + valid_false:
+        raise RuntimeError(
+            f"Configurație invalidă/ambiguă pentru ALPACA_PAPER='{raw_mode}'. "
+            f"Setează explicit ALPACA_PAPER=True (Paper) sau ALPACA_PAPER=False (Live) în .env."
+        )
 
-# Sectoare Defensive / Lente interzise la deschiderea de pozitii noi (nu blocam capitalul in Pharma/Utilitati/Oil)
-BLOCKED_SECTORS = {"HEALTHCARE", "ENERGY_MATERIALS", "DEFENSIVE_STAPLES"}
+    is_paper = raw_mode in valid_true
+    mode_name = "paper" if is_paper else "live"
+    has_keys = bool(ALPACA_API_KEY and ALPACA_SECRET_KEY and "XXXX" not in ALPACA_API_KEY)
 
-# Bonus de Prioritate Alpha in Scorul Compozit (0-100) pentru concentrarea focurilor unde se fac banii:
+    if not is_paper and not has_keys:
+        raise RuntimeError(
+            "EXECUȚIE LIVE BLOCATĂ (FAIL-FAST): ALPACA_PAPER=False (bani reali), "
+            "dar cheile ALPACA_API_KEY / ALPACA_SECRET_KEY lipsesc sau sunt invalide!"
+        )
+
+    if not is_paper and ALPACA_API_KEY.upper().startswith("PK"):
+        raise RuntimeError(
+            "EXECUȚIE LIVE BLOCATĂ (FAIL-FAST): ALPACA_PAPER=False, dar cheia API începe cu 'PK' (cheie Paper)!"
+        )
+
+    if require_broker and not has_keys:
+        raise RuntimeError(
+            "Conexiunea la broker este obligatorie pentru acest mod, dar cheile Alpaca API lipsesc din .env."
+        )
+
+    return {
+        "mode": mode_name,
+        "is_paper": is_paper,
+        "has_keys": has_keys,
+    }
+
+
+# ==============================================================================
+# 7. MAPARE SECTOARE & LIMITE DE CORELAȚIE
+# ==============================================================================
+BLOCKED_SECTORS: set = set()  # Niciun sector S&P 500 nu este blocat orb; selecția se face pe Stage 2 + RS/ATR
+
 SECTOR_PRIORITY_BONUS = {
-    "SEMICONDUCTORS": 14.0,     # Tier 1 Alpha: Cipuri AI, Hardware & Networking
-    "SOFTWARE_CLOUD": 12.0,     # Tier 1 Alpha: Cloud AI, Enterprise Software & Big Tech
-    "CYBERSECURITY": 10.0,      # Tier 1 Alpha: Securitate Cibernetica
-    "AI_POWER_INFRA": 9.0,      # Tier 1 Alpha: Data-Center Power Grid & Cooling
-    "HIGH_BETA_GROWTH": 6.0,    # Tier 2: Consumer Tech, E-Commerce & FinTech Momentum
-    "INDUSTRIALS_POWER": 5.0,   # Alias compatibilitate
-    "CONSUMER_RETAIL": 3.0,     # Alias compatibilitate
-    "FINANCIALS": 2.0,          # Tier 3: Doar cand au RS exceptional
-    "HEALTHCARE": -25.0,        # Blocat / Penalizat sever
-    "ENERGY_MATERIALS": -20.0,  # Blocat / Penalizat sever
-    "DEFENSIVE_STAPLES": -25.0, # Blocat / Penalizat sever
+    "SEMICONDUCTORS": 0.0,
+    "SOFTWARE_CLOUD": 0.0,
+    "CYBERSECURITY": 0.0,
+    "AI_POWER_INFRA": 0.0,
+    "INDUSTRIALS_POWER": 0.0,
+    "FINANCIALS": 0.0,
+    "HEALTHCARE": 0.0,
+    "CONSUMER_RETAIL": 0.0,
+    "HIGH_BETA_GROWTH": 0.0,
+    "ENERGY_MATERIALS": 0.0,
+    "DEFENSIVE_STAPLES": 0.0,
     "OTHER": 0.0,
 }
 
-# Limita maxima de pozitii simultane per sector (permitem pana la 3 pozitii pe liderii AI/Tech!):
 SECTOR_MAX_POSITIONS = {
-    "SEMICONDUCTORS": 3,
-    "SOFTWARE_CLOUD": 3,
+    "SEMICONDUCTORS": 2,
+    "SOFTWARE_CLOUD": 2,
     "CYBERSECURITY": 2,
     "AI_POWER_INFRA": 2,
+    "INDUSTRIALS_POWER": 2,
+    "FINANCIALS": 2,
+    "HEALTHCARE": 2,
+    "CONSUMER_RETAIL": 2,
     "HIGH_BETA_GROWTH": 2,
-    "FINANCIALS": 1,
-    "HEALTHCARE": 0,
-    "ENERGY_MATERIALS": 0,
-    "DEFENSIVE_STAPLES": 0,
+    "ENERGY_MATERIALS": 1,
+    "DEFENSIVE_STAPLES": 2,
 }
 
-# Cota maxima de simboluri in Watchlist-ul Zilnic (35 total) — pondere masiva pe Tech & AI:
 SECTOR_WATCHLIST_QUOTA = {
-    "SEMICONDUCTORS": 12,
-    "SOFTWARE_CLOUD": 11,
-    "CYBERSECURITY": 4,
+    "SEMICONDUCTORS": 7,
+    "SOFTWARE_CLOUD": 7,
+    "CYBERSECURITY": 3,
     "AI_POWER_INFRA": 5,
-    "HIGH_BETA_GROWTH": 6,
-    "FINANCIALS": 2,
-    "HEALTHCARE": 0,
-    "ENERGY_MATERIALS": 0,
-    "DEFENSIVE_STAPLES": 0,
+    "FINANCIALS": 5,
+    "HEALTHCARE": 4,
+    "CONSUMER_RETAIL": 4,
+    "HIGH_BETA_GROWTH": 3,
+    "DEFENSIVE_STAPLES": 3,
+    "ENERGY_MATERIALS": 2,
 }
 
 SECTOR_MAP = {
-    # 1. Semiconductori, Cipuri AI, Stocare & High-Speed Networking (Tier 1 Alpha)
+    # 1. Semiconductori & Networking
     "NVDA": "SEMICONDUCTORS", "AVGO": "SEMICONDUCTORS", "AMD": "SEMICONDUCTORS",
     "TSM": "SEMICONDUCTORS", "ASML": "SEMICONDUCTORS", "MU": "SEMICONDUCTORS",
     "ANET": "SEMICONDUCTORS", "MRVL": "SEMICONDUCTORS", "ARM": "SEMICONDUCTORS",
@@ -193,7 +297,7 @@ SECTOR_MAP = {
     "CLS": "SEMICONDUCTORS", "FN": "SEMICONDUCTORS", "SMCI": "SEMICONDUCTORS",
     "MPWR": "SEMICONDUCTORS", "ON": "SEMICONDUCTORS", "SNPS": "SEMICONDUCTORS",
     "CDNS": "SEMICONDUCTORS",
-    # 2. Software, Cloud, Big Tech AI & Data (Tier 1 Alpha)
+    # 2. Software, Cloud & Big Tech
     "MSFT": "SOFTWARE_CLOUD", "AAPL": "SOFTWARE_CLOUD", "GOOGL": "SOFTWARE_CLOUD",
     "AMZN": "SOFTWARE_CLOUD", "META": "SOFTWARE_CLOUD", "PLTR": "SOFTWARE_CLOUD",
     "CRM": "SOFTWARE_CLOUD", "NOW": "SOFTWARE_CLOUD", "ORCL": "SOFTWARE_CLOUD",
@@ -202,52 +306,52 @@ SECTOR_MAP = {
     "CSCO": "SOFTWARE_CLOUD", "DDOG": "SOFTWARE_CLOUD", "MDB": "SOFTWARE_CLOUD",
     "RDDT": "SOFTWARE_CLOUD", "IOT": "SOFTWARE_CLOUD", "TEAM": "SOFTWARE_CLOUD",
     "HUBS": "SOFTWARE_CLOUD", "MSTR": "SOFTWARE_CLOUD",
-    # 3. Cybersecurity (Tier 1 Alpha)
+    # 3. Cybersecurity
     "PANW": "CYBERSECURITY", "CRWD": "CYBERSECURITY", "NET": "CYBERSECURITY",
     "ZS": "CYBERSECURITY", "FTNT": "CYBERSECURITY", "CYBR": "CYBERSECURITY", "S": "CYBERSECURITY",
-    # 4. Infrastructura AI Data-Centers, Energie Nucleara & Electrificare (Tier 1 Alpha)
+    # 4. Industriale, Electrificare & Infrastructură
     "VRT": "AI_POWER_INFRA", "VST": "AI_POWER_INFRA", "CEG": "AI_POWER_INFRA",
     "GEV": "AI_POWER_INFRA", "ETN": "AI_POWER_INFRA", "PWR": "AI_POWER_INFRA",
     "GE": "AI_POWER_INFRA", "CAT": "AI_POWER_INFRA", "URI": "AI_POWER_INFRA", "AXON": "AI_POWER_INFRA",
-    # 5. High-Beta Consumer Tech, E-Commerce & FinTech Attackers (Tier 2 Momentum)
+    "LMT": "INDUSTRIALS_POWER", "RTX": "INDUSTRIALS_POWER",
+    # 5. Growth & Consumer Tech
     "TSLA": "HIGH_BETA_GROWTH", "NFLX": "HIGH_BETA_GROWTH", "UBER": "HIGH_BETA_GROWTH",
     "SHOP": "HIGH_BETA_GROWTH", "SPOT": "HIGH_BETA_GROWTH", "MELI": "HIGH_BETA_GROWTH",
-    "DASH": "HIGH_BETA_GROWTH", "BKNG": "HIGH_BETA_GROWTH", "ABNB": "HIGH_BETA_GROWTH",
+    "DASH": "HIGH_BETA_GROWTH", "BKNG": "CONSUMER_RETAIL", "ABNB": "CONSUMER_RETAIL",
     "DKNG": "HIGH_BETA_GROWTH", "HOOD": "HIGH_BETA_GROWTH", "COIN": "HIGH_BETA_GROWTH",
     "SOFI": "HIGH_BETA_GROWTH", "NU": "HIGH_BETA_GROWTH", "AFRM": "HIGH_BETA_GROWTH",
     "XYZ": "HIGH_BETA_GROWTH",
-    # 6. Finante & Capital Markets (Tier 3 - Selectiv)
+    # 6. Finanțe
     "GS": "FINANCIALS", "KKR": "FINANCIALS", "APO": "FINANCIALS", "AXP": "FINANCIALS",
     "V": "FINANCIALS", "MA": "FINANCIALS", "JPM": "FINANCIALS", "MS": "FINANCIALS",
     "BLK": "FINANCIALS", "SPGI": "FINANCIALS", "BX": "FINANCIALS", "SCHW": "FINANCIALS",
-    # 7. Sectoare Defensive / Vechi (Mapate pentru blocare automata daca apar in istoric)
+    # 7. Healthcare
     "LLY": "HEALTHCARE", "ISRG": "HEALTHCARE", "ABBV": "HEALTHCARE", "VRTX": "HEALTHCARE",
     "REGN": "HEALTHCARE", "BSX": "HEALTHCARE", "SYK": "HEALTHCARE", "UNH": "HEALTHCARE",
+    # 8. Energie & Materiale
     "XOM": "ENERGY_MATERIALS", "CVX": "ENERGY_MATERIALS", "SLB": "ENERGY_MATERIALS", "FCX": "ENERGY_MATERIALS",
+    # 9. Consumer & Retail Leaders
     "WMT": "DEFENSIVE_STAPLES", "COST": "DEFENSIVE_STAPLES", "KO": "DEFENSIVE_STAPLES",
-    "DIS": "DEFENSIVE_STAPLES", "NKE": "DEFENSIVE_STAPLES", "HD": "DEFENSIVE_STAPLES",
-    "TJX": "DEFENSIVE_STAPLES", "LMT": "DEFENSIVE_STAPLES", "RTX": "DEFENSIVE_STAPLES",
-    "DAL": "DEFENSIVE_STAPLES", "UAL": "DEFENSIVE_STAPLES", "RCL": "DEFENSIVE_STAPLES",
+    "DIS": "CONSUMER_RETAIL", "NKE": "CONSUMER_RETAIL", "HD": "CONSUMER_RETAIL",
+    "TJX": "CONSUMER_RETAIL", "DAL": "CONSUMER_RETAIL", "UAL": "CONSUMER_RETAIL", "RCL": "CONSUMER_RETAIL",
 }
 
 
 def get_ticker_sector(ticker: str) -> str:
-    """Returneaza sectorul institutional al unui simbol pentru controlul rotatiei si corelatiei."""
+    """Returnează sectorul unui simbol pentru controlul rotației și corelației."""
     return SECTOR_MAP.get(ticker.upper(), "OTHER")
 
 
 def is_sector_blocked(sector: str) -> bool:
-    """Returneaza True daca sectorul este blocat (ex: HEALTHCARE, DEFENSIVE_STAPLES)."""
-    return sector.upper() in BLOCKED_SECTORS or SECTOR_MAX_POSITIONS.get(sector.upper(), 2) <= 0
+    """Returnează True doar dacă sectorul este blocat explicit în configurație."""
+    return sector.upper() in BLOCKED_SECTORS or SECTOR_MAX_POSITIONS.get(sector.upper(), MAX_POSITIONS_PER_SECTOR) <= 0
 
 
 def get_sector_max_positions(sector: str) -> int:
-    """Returneaza numarul maxim de pozitii simultane permise intr-un anumit sector."""
+    """Returnează numărul maxim de poziții simultane permise într-un sector."""
     return SECTOR_MAX_POSITIONS.get(sector.upper(), MAX_POSITIONS_PER_SECTOR)
 
 
 def get_sector_priority_bonus(sector: str) -> float:
-    """Returneaza bonusul de prioritate Alpha al sectorului (pentru concentrarea pe AI & Tech)."""
+    """Returnează bonusul structural de sector."""
     return SECTOR_PRIORITY_BONUS.get(sector.upper(), 0.0)
-
-

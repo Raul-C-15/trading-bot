@@ -1,17 +1,15 @@
 """
-Modul de Gestionare Automată a Pozițiilor Active (Position Manager Institutional).
-Funcționalități profesionale de swing trading:
-1. Auto-Breakeven (Risc Zero / Free-Roll):
-   - Când o poziție atinge un profit de >= 1.0R, >= +2.0% sau când Lotul 1 (50%) s-a închis la TP1,
-     Stop-Loss-ul este ridicat automat la nivelul prețului de intrare (+0.15% buffer).
-   - Poziția devine 'Free-Roll' (0% risc activ în Portfolio Heat).
-2. Trailing Stop Dinamic Hibrid (Chandelier + EMA 20 / Low 3D):
-   - Pentru pozițiile cu câștiguri mari (>= +4.5% sau >= 1.4R), Stop-Loss-ul urmărește
-     prețul combinând distanța Chandelier (3.8% sub maximul atins) cu suportul tehnic.
-3. Protecție Automată la Earnings pentru Pozițiile Deschise:
-   - Dacă o poziție activă are raportare financiară (Earnings) în <= 2 zile, strânge
-     automat Stop-Loss-ul pentru a proteja capitalul împotriva gap-urilor binare.
-4. Notificări instantanee pe Telegram la fiecare ridicare de Stop-Loss.
+Modul de Gestionare Automată a Pozițiilor Active (Position Manager Institutional V2).
+100% aliniat cu `backtester.py` și regulile instituționale de Swing Trading:
+  1. FĂRĂ Breakeven prematur la +2% (care sufoca tranzacțiile pe zgomotul intraday):
+     - La atingerea TP1 (1.5R), închide 50% din poziție cu ordin Limit și mută Stop-Loss-ul
+       pentru restul de 50% (Runner) la Breakeven (+0.20% buffer).
+  2. Trailing Stop pe EMA 20 Zilnic (EXCLUSIV după TP1):
+     - Urmărește Runner-ul pe media mobilă exponențială EMA 20 zilnică închisă până la TP2 (2.5R).
+  3. Protecție la Deschiderea Bursei (09:30 - 09:40 ET):
+     - Evită execuțiile Market în spread-ul larg din primele minute ale deschiderii (cu excepția
+       unui gap-down sever de urgență).
+  4. Curățare automată a pozițiilor fantomă din `positions_state.json` și protecție Earnings (<= 2z).
 """
 
 import json
@@ -46,7 +44,7 @@ class PositionManager:
         self.state = _load_json(POSITIONS_STATE_FILE, {})
 
     def _get_active_stop_orders(self, orders, symbol: str) -> list:
-        """Găsește toate ordinele de Stop active/held pentru un simbol."""
+        """Găsește toate ordinele de Stop active/held pe server pentru un simbol."""
         active = []
         for o in orders:
             if o.symbol != symbol:
@@ -54,15 +52,41 @@ class PositionManager:
             side = getattr(o.side, "name", str(o.side)).lower()
             order_type = getattr(o.order_type, "name", str(o.order_type)).lower()
             status = getattr(o.status, "name", str(o.status)).lower()
-
             if side == "sell" and "stop" in order_type and status in ("new", "held", "open", "accepted"):
                 active.append(o)
         return active
 
+    def _is_opening_chaos_window(self) -> bool:
+        """Returnează True dacă suntem în primele N minute de la deschiderea SUA (09:30 - 09:40 ET)."""
+        guard_min = int(getattr(config, "POSITION_MGR_OPEN_GUARD_MINUTES", 10))
+        if guard_min <= 0 or not self.trader or not getattr(self.trader, "client", None):
+            return False
+        try:
+            clock = self.trader._api_call(self.trader.client.get_clock)
+            if clock.is_open and clock.timestamp.hour == 9 and (30 <= clock.timestamp.minute < 30 + guard_min):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _get_closed_ema20(self, symbol: str) -> float:
+        """Returnează valoarea EMA 20 de pe ultima lumânare zilnică complet închisă."""
+        try:
+            from data_loader import fetch_stock_data
+            df = fetch_stock_data(symbol, period="6mo", closed_only=True)
+            if not df.empty and "EMA_20" in df.columns:
+                val = float(df["EMA_20"].iloc[-1])
+                if val > 0:
+                    return val
+        except Exception:
+            pass
+        return 0.0
+
     def manage_positions(self) -> List[Dict]:
         """
-        Scanează toate pozițiile active și aplică regulile de Auto-Breakeven,
-        Trailing Stop și Protecție înainte de Earnings.
+        Sincronizează și gestionează pozițiile active:
+          - Elimină stările fantomă pentru simbolurile închise.
+          - Execută SL, TP1 (50% + Breakeven), Trailing pe EMA 20 și TP2 (50%).
         """
         if self.trader is None:
             try:
@@ -75,23 +99,44 @@ class PositionManager:
             return []
 
         try:
-            from alpaca.trading.requests import GetOrdersRequest, ReplaceOrderRequest, MarketOrderRequest
+            from alpaca.trading.requests import GetOrdersRequest, ReplaceOrderRequest, LimitOrderRequest
             from alpaca.trading.enums import QueryOrderStatus, OrderSide, TimeInForce
         except ImportError:
             return []
 
         open_positions = self.trader.get_open_positions()
+        open_buy_orders = self.trader.get_open_buy_orders()
+        valid_active_syms = {p["symbol"] for p in open_positions} | {o.symbol for o in open_buy_orders}
+
+        # Curățăm automat pozițiile fantomă închise anterior din positions_state.json
+        stale_keys = [k for k in list(self.state.keys()) if k not in valid_active_syms]
+        if stale_keys:
+            for k in stale_keys:
+                self.state.pop(k, None)
+            _save_json(POSITIONS_STATE_FILE, self.state)
+
         if not open_positions:
             return []
 
         try:
-            all_orders = self.trader.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=100))
+            all_orders = self.trader._api_call(
+                self.trader.client.get_orders,
+                GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=100)
+            )
         except Exception as e:
             print(f"⚠️ Eroare la citirea ordinelor Alpaca: {e}")
             return []
 
+        in_open_guard = self._is_opening_chaos_window()
         actions_taken = []
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        today_tag = datetime.now().strftime("%Y%m%d")
+
+        tp1_rr = float(getattr(config, "TP1_RISK_REWARD_RATIO", 1.5))
+        tp2_rr = float(getattr(config, "TP2_RISK_REWARD_RATIO", 2.5))
+        tp1_exit_pct = float(getattr(config, "TP1_EXIT_PERCENT", 0.50))
+        be_buf = float(getattr(config, "BREAKEVEN_BUFFER_PCT", 0.0020))
+        ema_trail_buf = float(getattr(config, "EMA20_TRAIL_BUFFER_PCT", 0.015))
 
         for pos in open_positions:
             symbol = pos["symbol"]
@@ -103,16 +148,20 @@ class PositionManager:
             active_stops = self._get_active_stop_orders(all_orders, symbol)
 
             if symbol not in self.state:
-                default_stop = min((float(s.stop_price) for s in active_stops if s.stop_price is not None), default=round(entry_price * 0.965, 2))
+                default_stop = min(
+                    (float(s.stop_price) for s in active_stops if s.stop_price is not None),
+                    default=round(entry_price * 0.955, 2)
+                )
+                init_r = max(0.01, entry_price - default_stop)
                 self.state[symbol] = {
                     "setup_type": "PULLBACK_EMA20",
-                    "entry_price": entry_price,
+                    "entry_price": round(entry_price, 2),
                     "initial_stop": default_stop,
-                    "initial_risk": max(0.01, entry_price - default_stop),
-                    "tp1": round(entry_price + 1.5 * max(0.01, entry_price - default_stop), 2),
-                    "tp2": round(entry_price + 3.0 * max(0.01, entry_price - default_stop), 2),
+                    "initial_risk": round(init_r, 2),
+                    "tp1": round(entry_price + tp1_rr * init_r, 2),
+                    "tp2": round(entry_price + tp2_rr * init_r, 2),
                     "initial_qty": qty,
-                    "peak_price": current_price,
+                    "peak_price": max(entry_price, current_price),
                     "tp1_hit": False,
                     "fractional_managed": (len(active_stops) == 0),
                     "breakeven_active": (default_stop >= entry_price * 0.999),
@@ -121,31 +170,43 @@ class PositionManager:
                 }
 
             stock_state = self.state[symbol]
+            # Recalibrăm țintele la prețul real de umplere dacă tocmai s-a executat intrarea
+            if abs(float(stock_state.get("entry_price", entry_price)) - entry_price) > 0.05 and not stock_state.get("tp1_hit", False):
+                init_stop = float(stock_state.get("initial_stop", round(entry_price * 0.955, 2)))
+                real_risk = max(0.01, entry_price - init_stop)
+                stock_state["entry_price"] = round(entry_price, 2)
+                stock_state["initial_risk"] = round(real_risk, 2)
+                stock_state["tp1"] = round(entry_price + tp1_rr * real_risk, 2)
+                stock_state["tp2"] = round(entry_price + tp2_rr * real_risk, 2)
+
             if active_stops:
                 current_stop = min(float(s.stop_price) for s in active_stops if s.stop_price is not None)
                 stock_state["last_stop_price"] = current_stop
             else:
-                current_stop = float(stock_state.get("last_stop_price", round(entry_price * 0.965, 2)))
+                current_stop = float(stock_state.get("last_stop_price", round(entry_price * 0.955, 2)))
 
-            stock_state["peak_price"] = max(stock_state.get("peak_price", current_price), current_price)
-            initial_risk = stock_state.get("initial_risk", max(0.01, entry_price - current_stop))
-            if initial_risk <= 0.05:
-                initial_risk = max(0.50, entry_price * 0.025)
-
+            stock_state["peak_price"] = max(float(stock_state.get("peak_price", current_price)), current_price)
             initial_qty = float(stock_state.get("initial_qty", qty))
-            lot1_closed = (qty < initial_qty * 0.95) or bool(stock_state.get("tp1_hit", False))
+            lot1_closed = (qty < initial_qty * 0.85) or bool(stock_state.get("tp1_hit", False))
+            if lot1_closed and not stock_state.get("tp1_hit", False):
+                stock_state["tp1_hit"] = True
 
-            # --- EXECUȚIE AUTOMATĂ SL / TP1 (50%) / TP2 (50%) PENTRU POZIȚII FRACȚIONARE ---
+            # --- EXECUȚIE AUTOMATĂ PENTRU POZIȚII FRACȚIONARE (FĂRĂ BRACKET NATIV PE SERVER) ---
             if not active_stops:
                 tp1_level = float(stock_state.get("tp1", 0.0))
                 tp2_level = float(stock_state.get("tp2", 0.0))
 
-                # 1. Verificare atingere Stop-Loss / Breakeven / Trailing Stop
-                if current_price <= current_stop:
+                # 1. Verificare Stop-Loss (în primele 10 min de la deschidere ieșim doar la urgență <= stop * 0.98)
+                sl_triggered = (current_price <= current_stop * 0.98) if in_open_guard else (current_price <= current_stop)
+                if sl_triggered:
                     try:
-                        self.trader.client.close_position(symbol)
+                        self.trader._api_call(self.trader.client.close_position, symbol)
                         pnl_realized = round((current_price - entry_price) * qty, 2)
-                        exit_label = "TRAILING_STOP_EXIT" if current_stop > entry_price * 1.005 else ("BREAKEVEN_EXIT" if stock_state.get("breakeven_active") else "STOP_LOSS_EXIT")
+                        exit_label = (
+                            "TRAILING_STOP_EXIT"
+                            if current_stop > entry_price * 1.005
+                            else ("BREAKEVEN_EXIT" if stock_state.get("breakeven_active") else "STOP_LOSS_EXIT")
+                        )
                         act_sl = {
                             "symbol": symbol,
                             "action": exit_label,
@@ -160,31 +221,38 @@ class PositionManager:
                         self.state.pop(symbol, None)
                         continue
                     except Exception as e:
-                        print(f"⚠️ Eroare la închiderea SL pentru poziția fracționară {symbol}: {e}")
+                        print(f"⚠️ Eroare la închiderea SL pentru {symbol}: {e}")
 
-                # 2. Verificare atingere TP1 (50% Scale-Out + Mutare Stop la Breakeven)
+                if in_open_guard:
+                    continue
+
+                # 2. Verificare TP1 (50% Scale-Out prin ordin Limit + Mutare Stop la Breakeven)
                 if not lot1_closed and tp1_level > 0 and current_price >= tp1_level:
-                    sell_qty = round(qty * float(getattr(config, "TP1_EXIT_PERCENT", 0.50)), 4)
+                    sell_qty = round(qty * tp1_exit_pct, 4)
                     if sell_qty > 0:
                         try:
-                            req_tp1 = MarketOrderRequest(
+                            lim_sell_p = round(max(tp1_level * 0.998, current_price * 0.998), 2)
+                            req_tp1 = LimitOrderRequest(
                                 symbol=symbol,
                                 qty=sell_qty,
                                 side=OrderSide.SELL,
-                                time_in_force=TimeInForce.DAY
+                                time_in_force=TimeInForce.DAY,
+                                limit_price=lim_sell_p,
                             )
-                            self.trader.client.submit_order(order_data=req_tp1)
+                            self.trader._submit_order_idempotent(req_tp1, f"SWING_{symbol}_{today_tag}_TP1")
                             stock_state["tp1_hit"] = True
                             stock_state["breakeven_active"] = True
-                            be_stop = round(entry_price * 1.0015, 2)
+                            be_stop = round(entry_price * (1.0 + be_buf), 2)
+                            old_s = current_stop
                             stock_state["last_stop_price"] = max(current_stop, be_stop)
                             current_stop = stock_state["last_stop_price"]
+                            stock_state["updated_at"] = now_str
                             lot1_closed = True
-                            locked = round((tp1_level - entry_price) * sell_qty, 2)
+                            locked = round((lim_sell_p - entry_price) * sell_qty, 2)
                             act_tp1 = {
                                 "symbol": symbol,
                                 "action": "TP1_SCALE_OUT_50% + BREAKEVEN",
-                                "old_stop": current_stop,
+                                "old_stop": old_s,
                                 "new_stop": current_stop,
                                 "current_price": current_price,
                                 "locked_profit": locked,
@@ -192,19 +260,28 @@ class PositionManager:
                             }
                             actions_taken.append(act_tp1)
                             self._send_telegram_update(act_tp1, plpc)
+                            continue
                         except Exception as e:
                             print(f"⚠️ Eroare la vânzarea 50% TP1 pentru {symbol}: {e}")
 
-                # 3. Verificare atingere TP2 (Închidere Runner 50%)
-                if lot1_closed and tp2_level > 0 and current_price >= tp2_level:
+                # 3. Verificare TP2 (Închidere Runner 50% la ținta finală)
+                elif lot1_closed and tp2_level > 0 and current_price >= tp2_level:
                     try:
-                        self.trader.client.close_position(symbol)
-                        locked = round((current_price - entry_price) * qty, 2)
+                        lim_tp2_p = round(max(tp2_level * 0.998, current_price * 0.998), 2)
+                        req_tp2 = LimitOrderRequest(
+                            symbol=symbol,
+                            qty=qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                            limit_price=lim_tp2_p,
+                        )
+                        self.trader._submit_order_idempotent(req_tp2, f"SWING_{symbol}_{today_tag}_TP2")
+                        locked = round((lim_tp2_p - entry_price) * qty, 2)
                         act_tp2 = {
                             "symbol": symbol,
                             "action": "TP2_RUNNER_EXIT_100%",
                             "old_stop": current_stop,
-                            "new_stop": current_price,
+                            "new_stop": lim_tp2_p,
                             "current_price": current_price,
                             "locked_profit": locked,
                             "shares": qty
@@ -216,52 +293,51 @@ class PositionManager:
                     except Exception as e:
                         print(f"⚠️ Eroare la închiderea TP2 pentru {symbol}: {e}")
 
-            gain_per_share = current_price - entry_price
-            r_multiple = (gain_per_share / initial_risk) if initial_risk > 0 else 0.0
+            if in_open_guard:
+                continue
 
             target_stop = None
             action_type = None
 
-            # --- REGULA 0: PROTECȚIE EARNINGS IMINENT (<= 2 ZILE) PENTRU POZIȚII DESCHISE ---
-            warn_days = getattr(config, "EARNINGS_OPEN_POS_WARN_DAYS", 2)
+            # --- REGULA A: PROTECȚIE EARNINGS IMINENT (<= 2 ZILE) ---
+            warn_days = int(getattr(config, "EARNINGS_OPEN_POS_WARN_DAYS", 2))
             try:
                 from data_loader import get_next_earnings_date
                 next_e = get_next_earnings_date(symbol)
                 if next_e is not None:
                     days_to_e = (next_e - datetime.now()).days
-                    if 0 <= days_to_e <= warn_days:
-                        # Strângem Stop-Loss-ul la minim Breakeven sau la 1.5% sub prețul curent
-                        tight_stop = round(max(entry_price * 1.001, current_price * 0.985), 2)
-                        if tight_stop > current_stop and tight_stop < current_price:
+                    if 0 <= days_to_e <= warn_days and current_price > entry_price * 1.005:
+                        tight_stop = round(max(entry_price * (1.0 + be_buf), current_price * 0.985), 2)
+                        if tight_stop > current_stop and tight_stop < current_price * 0.995:
                             target_stop = tight_stop
                             action_type = "EARNINGS_PROTECTION"
             except Exception:
                 pass
 
-            # --- REGULA 1: TRAILING STOP (Profit Lock pentru câștiguri mari >= +4.5% sau >= 1.4R) ---
-            if target_stop is None and (plpc >= 4.5 or r_multiple >= 1.4):
-                trail_level = round(stock_state["peak_price"] * 0.962, 2)
-
-                if trail_level > entry_price * 1.01 and trail_level > current_stop + 0.50:
-                    target_stop = trail_level
-                    action_type = "TRAILING_STOP"
-
-            # --- REGULA 2: AUTO-BREAKEVEN (pentru >= +2.0%, >= 1.0R sau după închiderea Lotului 1 la TP1) ---
-            elif target_stop is None and (plpc >= 2.0 or r_multiple >= 1.0 or lot1_closed) and not stock_state.get("breakeven_active", False):
-                breakeven_level = round(entry_price * 1.0015, 2)
-                if breakeven_level > current_stop and breakeven_level < current_price:
-                    target_stop = breakeven_level
+            # --- REGULA B: BREAKEVEN PENTRU BRACKET-URI ÎNTREGI DUPĂ ÎNCHIDEREA LOTULUI 1 LA TP1 ---
+            if target_stop is None and lot1_closed and not stock_state.get("breakeven_active", False):
+                be_level = round(entry_price * (1.0 + be_buf), 2)
+                if be_level > current_stop and be_level < current_price * 0.995:
+                    target_stop = be_level
                     action_type = "BREAKEVEN"
 
-            # Executăm modificarea dacă am identificat un Stop mai mare
+            # --- REGULA C: TRAILING STOP PE EMA 20 ZILNIC (EXCLUSIV DUPĂ ATINGEREA TP1!) ---
+            if target_stop is None and lot1_closed:
+                closed_ema20 = self._get_closed_ema20(symbol)
+                if closed_ema20 > 0:
+                    trail_ema = round(closed_ema20 * (1.0 - ema_trail_buf), 2)
+                    if trail_ema > entry_price * (1.0 + be_buf) and trail_ema > current_stop + 0.25 and trail_ema < current_price * 0.995:
+                        target_stop = trail_ema
+                        action_type = "TRAILING_STOP"
+
             if target_stop and target_stop > current_stop and target_stop < current_price:
                 success_all = True
                 for stop_order in active_stops:
                     try:
                         replace_req = ReplaceOrderRequest(stop_price=target_stop)
-                        self.trader.client.replace_order_by_id(str(stop_order.id), replace_req)
+                        self.trader._api_call(self.trader.client.replace_order_by_id, str(stop_order.id), replace_req)
                     except Exception as e:
-                        print(f"⚠️ Eroare modificare Stop pentru {symbol} (Order {stop_order.id}): {e}")
+                        print(f"⚠️ Eroare modificare Stop pe server pentru {symbol} (Order {stop_order.id}): {e}")
                         success_all = False
 
                 if success_all:
@@ -299,39 +375,38 @@ class PositionManager:
             if act == "STOP_LOSS_EXIT":
                 title = "🛑 *POZIȚIE ÎNCHISĂ LA STOP-LOSS*"
                 desc = (
-                    f"Acțiunea `{sym}` a atins nivelul de protecție Stop-Loss (`${old_s:.2f}`).\n\n"
+                    f"Acțiunea `{sym}` a atins Stop-Loss-ul structural (`${old_s:.2f}`).\n\n"
                     f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
-                    f"• Rezultat Realizat: *${locked:+,.2f}*\n"
-                    f"🛡️ *Capitalul a fost protejat și simbolul intră în Cooldown.*"
+                    f"• Rezultat Realizat: *${locked:+,.2f}*"
                 )
             elif act in ("BREAKEVEN_EXIT", "TRAILING_STOP_EXIT"):
-                title = "🔒 *POZIȚIE ÎNCHISĂ PE PROFIT / BREAKEVEN*"
+                title = "🔒 *RUNNER ÎNCHIS LA BREAKEVEN / TRAILING STOP*"
                 desc = (
                     f"Acțiunea `{sym}` a atins Stop-ul dinamic (`${old_s:.2f}`).\n\n"
                     f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
-                    f"💰 *Rezultat Realizat:* *${locked:+,.2f}*"
+                    f"💰 *Rezultat Runner:* *${locked:+,.2f}*"
                 )
             elif "TP1_SCALE_OUT" in act:
-                title = "🎯 *TP1 ATINS (50% PROFIT MARCAT + FREE-ROLL)*"
+                title = "🎯 *TP1 ATINS (50% PROFIT MARCAT + BREAKEVEN ACTIV)*"
                 desc = (
-                    f"Acțiunea `{sym}` a atins prima țintă de profit!\n\n"
+                    f"Acțiunea `{sym}` a atins ținta TP1 (`1.5R`)!\n\n"
                     f"• Preț Curent: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
                     f"• Profit Marcat pe Lotul 1 (50%): *${locked:+,.2f}*\n"
-                    f"🛡️ *Stop-Loss-ul pentru restul de 50% a fost mutat la Breakeven (${new_s:.2f})!*"
+                    f"🛡️ *Stop-Loss-ul pentru Runner (50%) a fost mutat la Breakeven (${new_s:.2f})!*"
                 )
             elif "TP2_RUNNER_EXIT" in act:
-                title = "🚀 *TP2 ATINS (100% POZIȚIE ÎNCHISĂ LA ȚINTA FINALĂ)*"
+                title = "🚀 *TP2 ATINS (RUNNER ÎNCHIS LA ȚINTA FINALĂ)*"
                 desc = (
-                    f"Runner-ul pe `{sym}` a atins ținta majoră TP2!\n\n"
+                    f"Runner-ul pe `{sym}` a atins ținta TP2 (`2.5R`)!\n\n"
                     f"• Preț Execuție: *${cur_p:.2f}* (*{plpc:+.2f}%*)\n"
                     f"💰 *Profit Realizat Lot 2:* *${locked:+,.2f}*"
                 )
             elif act == "TRAILING_STOP":
-                title = "📈 *TRAILING STOP ACTIVAT (PROFIT SECURIZAT)*"
+                title = "📈 *TRAILING STOP PE EMA 20 ACTUALIZAT*"
                 desc = (
-                    f"Acțiunea `{sym}` este în creștere puternică (*{plpc:+.2f}%*).\n\n"
+                    f"Runner-ul pe `{sym}` își continuă trendul (*{plpc:+.2f}%*).\n\n"
                     f"• Preț Curent: *${cur_p:.2f}*\n"
-                    f"• Stop Vechi: ${old_s:.2f} ➔ *Noul Stop: ${new_s:.2f}*\n"
+                    f"• Stop Vechi: ${old_s:.2f} ➔ *Noul Stop EMA 20: ${new_s:.2f}*\n"
                     f"💰 *Profit Minim Garantat:* *${locked:+,.2f}*"
                 )
             elif act == "EARNINGS_PROTECTION":
@@ -339,25 +414,21 @@ class PositionManager:
                 desc = (
                     f"Acțiunea `{sym}` raportează rezultate financiare în <= 2 zile!\n\n"
                     f"• Preț Curent: *${cur_p:.2f}*\n"
-                    f"• Stop strâns preventiv: ${old_s:.2f} ➔ *${new_s:.2f}*\n"
-                    f"🛡️ *Profit Protejat:* *${locked:+,.2f}*"
+                    f"• Stop strâns preventiv: ${old_s:.2f} ➔ *${new_s:.2f}*"
                 )
             else:
-                title = "🛡️ *AUTO-BREAKEVEN ACTIVAT (FREE-ROLL / RISC ZERO)*"
+                title = "🛡️ *BREAKEVEN DUPĂ TP1 ACTIVAT*"
                 desc = (
-                    f"Poziția pe `{sym}` a avansat favorabil (*{plpc:+.2f}%*).\n\n"
-                    f"• Preț Curent: *${cur_p:.2f}*\n"
-                    f"• Stop Vechi: ${old_s:.2f} ➔ *Stop Breakeven: ${new_s:.2f}*\n"
-                    f"🔒 *Tranzacția este acum 100% fără risc și eliberează loc în Portfolio Heat!*"
+                    f"Lotul 1 pe `{sym}` a fost marcat la TP1.\n\n"
+                    f"• Stop Vechi: ${old_s:.2f} ➔ *Stop Breakeven: ${new_s:.2f}*"
                 )
 
-            msg = f"{title}\n\n{desc}"
-            send_telegram_message(msg)
+            send_telegram_message(f"{title}\n\n{desc}")
         except Exception:
             pass
 
 
 def run_position_manager(trader=None) -> List[Dict]:
-    """Punct de intrare simplu pentru rularea verificării de poziții."""
+    """Punct de intrare pentru gestionarea pozițiilor active."""
     pm = PositionManager(trader)
     return pm.manage_positions()

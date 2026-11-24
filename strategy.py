@@ -1,13 +1,16 @@
 """
-Logica strategiei Swing Trading Institutional si a Managementului de Risc.
-Sursa unica de adevar (Single Source of Truth) pentru Scanarea Live si Backtester:
-  1. Filtru Multi-Timeframe 1W (Stan Weinstein Stage 2: Weekly EMA 10 & SMA 30).
-  2. Filtru de Forta Relativa (RS_vs_SPY): Tranzactioneaza liderii care bat S&P 500.
-  3. SCENARIUL 1 — PULLBACK EMA 20: Retragere controlata pe suport cu confirmare
-     Anti-Falling Knife (lumanare verde / Hammer) si panta SMA 50 pozitiva.
-  4. SCENARIUL 2 — VOLUME BREAKOUT: Spargere maxim 20 zile cu volum exploziv,
-     inchidere in top 40% din range, RS pozitiv si fara supra-extindere (Climax Top).
-  5. Filtru ML XGBoost + Scor Compozit de Prioritizare a Semnalelor.
+Logica Strategiei Institutional Swing Trading V2 (Validată In-Sample & Out-of-Sample, Zero Look-Ahead Bias).
+Sursa unică de adevăr pentru Scanarea Live și Backtester:
+  1. Evaluare EXCLUSIV pe lumânări zilnice complet închise ('closed') și indicatori săptămânali cu shift(1).
+  2. Filtru Multi-Timeframe (1D + 1W Stage 2):
+       - 1D: Close > SMA 50 > SMA 200, EMA 20 > SMA 50, pante pozitive pe SMA 50 & SMA 200, volatilitate controlată.
+       - 1W: Close > 1W SMA 50 / SMA 30, 1W EMA 10 >= 1W SMA 30, 1W RSI în zonă sănătoasă.
+  3. SCENARIUL 1 — PULLBACK_EMA20 (Stage 2 Orderly Multi-Day Pullback):
+       - Retragere ordonată pe mai multe zile (RSI_4 <= 30, RSI_14 38-54) pe volum scăzut (Volume Dry-Up),
+         cu ordin Limit sub închidere și Stop-Loss sub suportul structural + ATR (fără tăiere în aer!).
+  4. SCENARIUL 2 — VOLUME_BREAKOUT (3+ Week Tight VCP Breakout în Power Trend):
+       - Contracție VCP (ATR_5/ATR_14 <= 0.85, bază 15D <= 8%), spargere peste maximul a 20 zile cu volum >= 150% SMA 20.
+  5. Dimensionare dinamică din Stop-Loss, verificare obligatorie R:R >= 1:2.0 și Poartă de Calitate ML.
 """
 
 from dataclasses import dataclass
@@ -20,17 +23,16 @@ from risk_learner import is_in_cooldown
 
 def check_weekly_confluence(df: pd.DataFrame) -> Tuple[bool, str, dict]:
     """
-    Verifica daca actiunea se afla intr-un trend saptamanal favorabil (Multi-Timeframe 1W):
-    1. Close >= Weekly_SMA_30 * 0.99 (peste trendul primar — Weinstein Stage 2).
-    2. Close >= Weekly_EMA_10 * 0.98 (mentine suportul intermediar saptamanal).
-    3. Weekly_EMA_10 >= Weekly_SMA_30 * 0.97 (mediile saptamanale sunt aliniate ascendent).
-    4. Weekly_RSI_14 intre WEEKLY_RSI_MIN si WEEKLY_RSI_MAX.
+    Verifică alinierea trendului pe graficul săptămânal (1W, cu shift(1) anti-lookahead):
+      1. Close >= Weekly_SMA_30 (și peste Weekly_SMA_50 când există istoric suficient).
+      2. Weekly_EMA_10 >= Weekly_SMA_30 (mediile săptămânale aliniate ascendent).
+      3. Weekly_RSI_14 între WEEKLY_RSI_MIN și WEEKLY_RSI_MAX.
     """
     if not getattr(config, "USE_WEEKLY_FILTER", True):
-        return True, "Filtru saptamanal dezactivat din config.", {}
+        return True, "Filtru săptămânal dezactivat din config.", {}
 
     if len(df) < 30:
-        return True, "Date insuficiente pentru calculul saptamanal.", {}
+        return True, "Date insuficiente pentru calculul săptămânal.", {}
 
     last = df.iloc[-1]
     if isinstance(last, pd.DataFrame):
@@ -38,63 +40,64 @@ def check_weekly_confluence(df: pd.DataFrame) -> Tuple[bool, str, dict]:
 
     close = float(last["Close"])
     weekly_ema = float(last.get("Weekly_EMA_10", np.nan))
-    weekly_sma = float(last.get("Weekly_SMA_30", np.nan))
+    weekly_sma30 = float(last.get("Weekly_SMA_30", np.nan))
+    weekly_sma50 = float(last.get("Weekly_SMA_50", np.nan))
     weekly_rsi = float(last.get("Weekly_RSI_14", np.nan))
 
-    if np.isnan(weekly_ema) or np.isnan(weekly_sma) or weekly_ema <= 0 or weekly_sma <= 0:
-        return True, "Indicatori saptamanali indisponibili.", {}
+    if np.isnan(weekly_ema) or np.isnan(weekly_sma30) or weekly_ema <= 0 or weekly_sma30 <= 0:
+        return True, "Indicatori săptămânali indisponibili.", {}
 
     metrics = {
         "weekly_close": close,
         "weekly_ema10": weekly_ema,
-        "weekly_sma30": weekly_sma,
+        "weekly_sma30": weekly_sma30,
+        "weekly_sma50": weekly_sma50,
         "weekly_rsi": weekly_rsi,
     }
 
-    if close < weekly_sma * 0.99:
-        pct_below = ((weekly_sma - close) / weekly_sma) * 100
-        return False, f"Sub trendul primar saptamanal (Close ${close:.2f} < 1W SMA 30 ${weekly_sma:.2f}, -{pct_below:.1f}%)", metrics
+    if close < weekly_sma30:
+        pct_below = ((weekly_sma30 - close) / weekly_sma30) * 100.0
+        return False, f"Sub trendul primar săptămânal (Close ${close:.2f} < 1W SMA 30 ${weekly_sma30:.2f}, -{pct_below:.1f}%)", metrics
 
-    if close < weekly_ema * 0.98:
-        pct_below = ((weekly_ema - close) / weekly_ema) * 100
-        return False, f"Sub EMA 10 saptamanal (Close ${close:.2f} < 1W EMA 10 ${weekly_ema:.2f}, -{pct_below:.1f}%)", metrics
+    if weekly_ema < weekly_sma30:
+        return False, f"Medii săptămânale inversate (1W EMA 10 ${weekly_ema:.2f} < 1W SMA 30 ${weekly_sma30:.2f})", metrics
 
-    if weekly_ema < weekly_sma * 0.97:
-        return False, f"Medii saptamanale inversate (1W EMA 10 ${weekly_ema:.2f} < 1W SMA 30 ${weekly_sma:.2f} — Stage 4 Downtrend)", metrics
-
-    rsi_max = getattr(config, "WEEKLY_RSI_MAX", 72.0)
-    rsi_min = getattr(config, "WEEKLY_RSI_MIN", 40.0)
+    rsi_max = float(getattr(config, "WEEKLY_RSI_MAX", 72.0))
+    rsi_min = float(getattr(config, "WEEKLY_RSI_MIN", 45.0))
 
     if not np.isnan(weekly_rsi):
         if weekly_rsi > rsi_max:
-            return False, f"RSI saptamanal supracumparat (1W RSI: {weekly_rsi:.1f} > {rsi_max}) — Risc de epuizare", metrics
+            return False, f"RSI săptămânal supracumpărat (1W RSI: {weekly_rsi:.1f} > {rsi_max})", metrics
         if weekly_rsi < rsi_min:
-            return False, f"RSI saptamanal in declin structural (1W RSI: {weekly_rsi:.1f} < {rsi_min})", metrics
+            return False, f"RSI săptămânal slab (1W RSI: {weekly_rsi:.1f} < {rsi_min})", metrics
 
-    return True, f"1W Trend Bullish: Close (${close:.2f}) > EMA 10 (${weekly_ema:.2f}) & SMA 30 (${weekly_sma:.2f})", metrics
+    return True, f"1W Stage 2 Bullish: Close (${close:.2f}) > 1W EMA 10 (${weekly_ema:.2f}) >= SMA 30 (${weekly_sma30:.2f})", metrics
 
 
 @dataclass
 class TradeSignal:
     ticker: str
-    action: str            # 'BUY' sau 'NO_TRADE'
-    setup_type: str        # 'PULLBACK_EMA20', 'VOLUME_BREAKOUT' sau 'NONE'
-    entry_price: float
+    action: str                  # 'BUY' sau 'NO_TRADE'
+    setup_type: str              # 'PULLBACK_EMA20', 'VOLUME_BREAKOUT' sau 'NONE'
+    entry_price: float           # Preț Limit propus pentru execuție
     stop_loss: float
-    tp1: float             # Take Profit 1 (50% scale-out + SL la Breakeven)
-    tp2: float             # Take Profit 2 (50% Runner)
+    tp1: float                   # Take Profit 1 (50% scale-out + mutare SL la Breakeven)
+    tp2: float                   # Take Profit 2 (50% Runner + Trailing pe EMA 20, R:R >= 2.0)
     risk_per_share: float
-    risk_reward_ratio: float
-    shares: float          # Numarul optim de actiuni
-    position_cost: float   # Valoarea totala a pozitiei
+    risk_reward_ratio: float     # Raport R:R până la ținta principală (>= MIN_RISK_REWARD_RATIO)
+    shares: float
+    position_cost: float
     reason: str
     ml_confidence: float = 0.0
-    rs_score: float = 0.0          # Forta Relativa vs SPY (%)
-    composite_score: float = 0.0   # Scor global de prioritizare a semnalului
-    sector: str = "OTHER"          # Sectorul industrial (ex: SEMICONDUCTORS)
+    rs_score: float = 0.0
+    composite_score: float = 0.0
+    sector: str = "OTHER"
     news_sentiment: str = "⚪ NEUTRU"
     news_headline: str = ""
     news_score: float = 0.0
+    signal_date: str = ""        # Data lumânării închise pe care s-a confirmat semnalul (pt idempotență)
+    signal_close: float = 0.0    # Prețul Close al lumânării închise
+    limit_entry: bool = True     # True = ordin Limit de pullback
 
 
 def calculate_position_size(
@@ -106,22 +109,24 @@ def calculate_position_size(
     risk_multiplier: float = 1.0
 ) -> dict:
     """
-    Calculeaza marimea pozitiei cu suport complet pentru ACTIUNI FRACTIONARE (ex: 0.28x LLY, 1.75x NVDA),
-    conform formulei stricte de 1-2% risc din capital si plafonului de alocare per pozitie (25% = $250 la $1,000):
-      Numar Actiuni = (Capital Total * Risc% * Multiplier) / (Pret Intrare - Pret Stop Loss)
-    Astfel, orice companie (chiar si de $600-$900/actiune) poate fi cumparata proportional pe un cont de $1,000.
+    Calculează dinamic mărimea poziției exclusiv din distanța până la Stop-Loss și riscul procentual:
+      position_size = (total_capital * effective_risk_pct) / abs(entry_price - stop_loss)
+    Respectă plafonul maxim pe o singură poziție (MAX_SINGLE_POSITION_PCT) și pragul minim anti-fragmentare.
     """
-    risk_per_share = entry_price - stop_loss
-    if risk_per_share <= 0 or entry_price <= 0:
-        return {"shares": 0, "position_cost": 0, "cash_at_risk": 0, "risk_per_share": 0}
+    if entry_price <= 0 or stop_loss <= 0 or entry_price <= stop_loss or total_capital <= 0:
+        return {"shares": 0.0, "position_cost": 0.0, "cash_at_risk": 0.0, "risk_per_share": 0.0}
+
+    risk_per_share = abs(entry_price - stop_loss)
+    if risk_per_share <= 1e-6:
+        return {"shares": 0.0, "position_cost": 0.0, "cash_at_risk": 0.0, "risk_per_share": 0.0}
 
     effective_risk_pct = risk_percent * max(0.0, min(1.25, risk_multiplier))
     max_allowed_dollar_risk = total_capital * effective_risk_pct
 
     shares = max_allowed_dollar_risk / risk_per_share
 
-    # Plafonare: O singura pozitie nu depaseste alocarea maxima pe portofoliu (ex: 25% = $250 pe cont de $1,000)
-    max_capital_per_position = total_capital / max(1, max_positions)
+    max_single_pct = float(getattr(config, "MAX_SINGLE_POSITION_PCT", 1.0 / max(1, max_positions)))
+    max_capital_per_position = total_capital * max_single_pct
     if (shares * entry_price) > max_capital_per_position:
         shares = max_capital_per_position / entry_price
 
@@ -131,14 +136,70 @@ def calculate_position_size(
         shares = float(int(shares))
 
     position_cost = round(shares * entry_price, 2)
-    actual_dollar_risk = round(shares * risk_per_share, 2)
+    min_alloc = max(
+        float(getattr(config, "MIN_POSITION_COST_USD", 50.0)),
+        total_capital * float(getattr(config, "MIN_POSITION_ALLOC_PCT", 0.12))
+    )
+    if shares <= 0 or (total_capital >= min_alloc and position_cost < min_alloc):
+        return {"shares": 0.0, "position_cost": 0.0, "cash_at_risk": 0.0, "risk_per_share": round(risk_per_share, 2)}
 
+    actual_dollar_risk = round(shares * risk_per_share, 2)
     return {
         "shares": shares,
         "position_cost": position_cost,
         "cash_at_risk": actual_dollar_risk,
         "risk_per_share": round(risk_per_share, 2)
     }
+
+
+def _passes_common_stage2_quality(last: pd.Series) -> Tuple[bool, str]:
+    """
+    Verifică filtrele instituționale comune de calitate a trendului Stage 2 (1D):
+      - Lichiditate >= MIN_AVG_VOLUME
+      - Volatilitate ordonată: MIN_ATR_PCT <= ATR_Pct <= MAX_ATR_PCT
+      - Aliniere Stage 2: Close > SMA 50 > SMA 200, EMA 20 > SMA 50 * 0.995
+      - Pante pozitive atât pe SMA 50, cât și pe SMA 200
+      - Fără zi de distribuție instituțională severă (lumânare roșie pe volum > 130% SMA 20)
+    """
+    close_p = float(last["Close"])
+    open_p = float(last["Open"])
+    sma_50 = float(last.get("SMA_50", np.nan))
+    sma_200 = float(last.get("SMA_200", np.nan))
+    ema_20 = float(last.get("EMA_20", np.nan))
+    atr_14 = float(last.get("ATR_14", np.nan))
+    vol_sma = float(last.get("Volume_SMA_20", 0.0))
+    volume = float(last.get("Volume", 0.0))
+    atr_pct = float(last.get("ATR_Pct", (atr_14 / close_p * 100.0) if close_p > 0 else 99.0))
+    slope_50 = float(last.get("SMA_50_Slope", 0.0))
+    slope_200 = float(last.get("SMA_200_Slope", 0.0))
+
+    if any(np.isnan(x) for x in [sma_50, sma_200, ema_20, atr_14]):
+        return False, "Indicatori zilnici incompleți (necesar > 200 lumânări)"
+
+    min_vol = float(getattr(config, "MIN_AVG_VOLUME", 700_000))
+    if vol_sma < min_vol:
+        return False, f"Lichiditate sub pragul instituțional ({vol_sma:,.0f} < {min_vol:,.0f})"
+
+    max_atr = float(getattr(config, "MAX_ATR_PCT", 4.3))
+    min_atr = float(getattr(config, "MIN_ATR_PCT", 1.0))
+    if atr_pct > max_atr:
+        return False, f"Volatilitate prea ridicată / haotică (ATR {atr_pct:.2f}% > {max_atr:.1f}%)"
+    if atr_pct < min_atr:
+        return False, f"Amplitudine prea mică (ATR {atr_pct:.2f}%)"
+
+    if not (close_p > sma_50 > sma_200):
+        return False, f"Nu este în Stage 2 Uptrend (Close ${close_p:.2f}, SMA50 ${sma_50:.2f}, SMA200 ${sma_200:.2f})"
+
+    if ema_20 <= sma_50 * 0.995:
+        return False, f"Trendul scurt s-a deteriorat (EMA 20 ${ema_20:.2f} <= SMA 50 ${sma_50:.2f})"
+
+    if slope_50 <= 0.0 or slope_200 <= 0.0:
+        return False, f"Mediile mobile nu au pantă ascendentă (Slope50: {slope_50:+.2f}%, Slope200: {slope_200:+.2f}%)"
+
+    if close_p < open_p and vol_sma > 0 and volume > 1.30 * vol_sma:
+        return False, "Distribuție instituțională detectată (vânzare pe volum ridicat)"
+
+    return True, "OK"
 
 
 def check_pullback_setup(
@@ -150,111 +211,105 @@ def check_pullback_setup(
     min_rr: Optional[float] = None,
     ema_period: int = 20,
     vol_mult: Optional[float] = None,
-    risk_multiplier: float = 1.0
+    risk_multiplier: float = 1.0,
+    rsi4_max: Optional[float] = None
 ) -> Optional[TradeSignal]:
     """
-    SCENARIUL 1: PULLBACK LA EMA 20 (CU FILTRU DE RICOȘEU, RS & VCP)
-    1. Trend Bullish: Close > SMA 50 si SMA 50 nu se prabuseste.
-    2. Suport EMA 20: Pretul testeaza zona EMA 20 (-1.5% .. +2.5%).
-    3. RSI in zona sanatoasa de resetare (38 - 56).
-    4. Forta Relativa (RS_vs_SPY) peste pragul minim acceptat.
-    5. Confirmare Anti-Falling Knife: Lumanare Verde SAU Hammer (fitil inferior >= 35%).
-    6. Fara distributie institutionala (fara lumanare rosie pe volum ridicat).
+    SCENARIUL 1: PULLBACK ORDONAT ÎN STAGE 2 UPTREND (Validat OOS cu ~56% Pos WR / ~72% Lot WR)
+      - Acțiune lider (RS_vs_SPY >= MIN_RS_VS_SPY_PULLBACK, fără extindere parabolică)
+      - Trend Stage 2 intact (Close > SMA 50 * 1.01 > SMA 200, EMA > SMA 50, pante pozitive)
+      - Retragere ordonată pe mai multe zile (RSI_4 <= 30, RSI_14 între 38 și 54) cu Volume Dry-Up
+      - Intrare prin ordin LIMIT (-0.3% sub Close), Stop-Loss sub suportul structural + 1.8x ATR
+      - Respinge tranzacția dacă Stop-Loss-ul depășește MAX_STOP_LOSS_PCT sau dacă R:R < MIN_RISK_REWARD_RATIO
     """
-    if len(df) < 50:
+    if len(df) < 205:
         return None
 
-    rsi_min = rsi_min if rsi_min is not None else config.RSI_PULLBACK_MIN
-    rsi_max = rsi_max if rsi_max is not None else config.RSI_PULLBACK_MAX
-    min_rr = min_rr if min_rr is not None else config.MIN_RISK_REWARD_RATIO
-    vol_mult = vol_mult if vol_mult is not None else getattr(config, "VOLUME_SURGE_MULTIPLIER", 1.25)
-    tp2_rr = getattr(config, "TP2_RISK_REWARD_RATIO", max(3.0, min_rr + 1.0))
+    rsi_min = float(rsi_min if rsi_min is not None else config.RSI_PULLBACK_MIN)
+    rsi_max = float(rsi_max if rsi_max is not None else config.RSI_PULLBACK_MAX)
+    rsi4_cap = float(rsi4_max if rsi4_max is not None else getattr(config, "RSI4_PULLBACK_MAX", 30.0))
+    required_min_rr = float(min_rr if min_rr is not None else config.MIN_RISK_REWARD_RATIO)
+    tp1_rr = float(getattr(config, "TP1_RISK_REWARD_RATIO", 1.5))
+    tp2_rr = max(required_min_rr, float(getattr(config, "TP2_RISK_REWARD_RATIO", 2.5)))
 
     last = df.iloc[-1]
-    open_p = float(last["Open"])
-    high_p = float(last["High"])
-    low_p = float(last["Low"])
-    close_p = float(last["Close"])
+    ok_q, _ = _passes_common_stage2_quality(last)
+    if not ok_q:
+        return None
 
+    close_p = float(last["Close"])
+    low_p = float(last["Low"])
     sma_50 = float(last["SMA_50"])
     ema_col = f"EMA_{ema_period}"
-    ema_val = float(last[ema_col]) if ema_col in last else float(last["EMA_20"])
-    rsi = float(last["RSI_14"])
-    atr = float(last["ATR_14"]) if "ATR_14" in df.columns and not pd.isna(last["ATR_14"]) else (close_p * 0.02)
-    volume = float(last["Volume"])
-    vol_sma_20 = float(last.get("Volume_SMA_20", 0))
-    rs_vs_spy = float(last.get("RS_vs_SPY", 0.0))
-    sma50_slope = float(last.get("SMA_50_Slope", 0.0))
-
-    # 1. Filtru Trend & Panta SMA 50
-    if close_p < sma_50 or sma50_slope < -0.50:
+    ema_val = float(last[ema_col]) if ema_col in last and not pd.isna(last[ema_col]) else float(last["EMA_20"])
+    if ema_val <= sma_50 * 0.995:
         return None
 
-    # 2. Filtru Forta Relativa vs SPY
+    rsi_14 = float(last["RSI_14"])
+    rsi_4 = float(last.get("RSI_4", 50.0))
+    atr_14 = float(last["ATR_14"])
+    vol_ratio_3d = float(last.get("Volume_Ratio_3D", 1.0))
+    rs_vs_spy = float(last.get("RS_vs_SPY", 0.0))
+
     if getattr(config, "USE_RELATIVE_STRENGTH", True):
-        min_rs = getattr(config, "MIN_RS_VS_SPY_PULLBACK", -5.0)
-        if not np.isnan(rs_vs_spy) and rs_vs_spy < min_rs:
+        min_rs = float(getattr(config, "MIN_RS_VS_SPY_PULLBACK", 2.0))
+        max_rs = float(getattr(config, "MAX_RS_VS_SPY_PARABOLIC", 45.0))
+        if np.isnan(rs_vs_spy) or rs_vs_spy < min_rs or rs_vs_spy > max_rs:
             return None
 
-    # 3. Testare suport EMA (pretul trebuie sa inchida pe sau peste suportul EMA 20)
-    distance_to_ema = abs(close_p - ema_val) / ema_val
-    touched_ema = (low_p <= ema_val * 1.01) and (close_p >= ema_val * 0.99)
-    valid_ema_zone = (distance_to_ema <= 0.025 and close_p >= ema_val * 0.99) or touched_ema
-    if not valid_ema_zone:
+    max_vol_r3 = float(getattr(config, "PULLBACK_MAX_VOL_RATIO_3D", 1.05))
+    if not (rsi_4 <= rsi4_cap and (rsi_min <= rsi_14 <= rsi_max) and close_p >= sma_50 * 1.01 and vol_ratio_3d <= max_vol_r3):
         return None
 
-    # 4. Filtru RSI
-    if not (rsi_min <= rsi <= rsi_max):
-        return None
+    lim_disc = float(getattr(config, "PULLBACK_LIMIT_DISCOUNT_PCT", 0.003))
+    entry_limit = round(close_p * (1.0 - lim_disc), 2)
 
-    # 5. Filtru Anti-Falling Knife (Confirmare stricta cu lumanare VERDE de reversare)
-    if close_p <= open_p:
-        return None
+    atr_mult = float(getattr(config, "ATR_STOP_MULTIPLIER", 1.8))
+    stop_loss = round(min(sma_50 * 0.985, low_p - (0.5 * atr_14), close_p - (atr_mult * atr_14)), 2)
 
-    # 6. Filtru Volum: Refuzam daca exista distributie anormala
-    if vol_sma_20 > 0 and volume > vol_mult * vol_sma_20 and close_p < open_p:
-        return None
-
-    # 7. Stop-Loss Structural + ATR (calibrat intre 2.5% si 5.5% pentru R:R si Win-Rate optim)
-    recent_low = float(df["Low"].iloc[-4:].min())
-    stop_loss = round(min(recent_low, low_p - (0.35 * atr)), 2)
-
-    stop_dist_pct = (close_p - stop_loss) / close_p
-    if stop_dist_pct < 0.025:
-        stop_loss = round(close_p * 0.972, 2)
-    elif stop_dist_pct > 0.055:
-        stop_loss = round(close_p * 0.945, 2)
-
-    risk_per_share = round(close_p - stop_loss, 2)
+    risk_per_share = round(entry_limit - stop_loss, 2)
     if risk_per_share <= 0:
         return None
 
-    tp1 = round(close_p + (min_rr * risk_per_share), 2)
-    tp2 = round(close_p + (tp2_rr * risk_per_share), 2)
+    stop_dist_pct = risk_per_share / entry_limit
+    min_sl_pct = float(getattr(config, "MIN_STOP_LOSS_PCT", 0.022))
+    max_sl_pct = float(getattr(config, "MAX_STOP_LOSS_PCT", 0.075))
+    if stop_dist_pct < min_sl_pct or stop_dist_pct > max_sl_pct:
+        return None
+
+    tp1 = round(entry_limit + (tp1_rr * risk_per_share), 2)
+    tp2 = round(entry_limit + (tp2_rr * risk_per_share), 2)
+    actual_rr = round((tp2 - entry_limit) / risk_per_share, 2)
+    if actual_rr < required_min_rr:
+        return None
 
     sizing = calculate_position_size(
-        close_p, stop_loss, total_capital,
+        entry_limit, stop_loss, total_capital,
         risk_percent=config.RISK_PER_TRADE_PERCENT,
         risk_multiplier=risk_multiplier
     )
     if sizing["shares"] <= 0:
         return None
 
-    rs_tag = f" | RS vs SPY: {rs_vs_spy:+.1f}%" if not np.isnan(rs_vs_spy) else ""
+    sig_date = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d")
+    rs_tag = f" | RS: {rs_vs_spy:+.1f}%"
     return TradeSignal(
         ticker=ticker,
         action="BUY",
         setup_type="PULLBACK_EMA20",
-        entry_price=round(close_p, 2),
+        entry_price=entry_limit,
         stop_loss=stop_loss,
         tp1=tp1,
         tp2=tp2,
-        risk_per_share=risk_per_share,
-        risk_reward_ratio=min_rr,
+        risk_per_share=sizing["risk_per_share"],
+        risk_reward_ratio=actual_rr,
         shares=sizing["shares"],
         position_cost=sizing["position_cost"],
-        reason=f"Setup PULLBACK CONFIRMAT: Ricoșeu validat la EMA {ema_period}{rs_tag}.",
-        rs_score=round(rs_vs_spy, 2) if not np.isnan(rs_vs_spy) else 0.0
+        reason=f"PULLBACK STAGE 2 CONFIRMAT: RSI(4)={rsi_4:.1f}, VolDry={vol_ratio_3d:.2f}x, R:R 1:{actual_rr:.1f}{rs_tag}.",
+        rs_score=round(rs_vs_spy, 2),
+        signal_date=sig_date,
+        signal_close=round(close_p, 2),
+        limit_entry=True
     )
 
 
@@ -267,75 +322,84 @@ def check_breakout_setup(
     risk_multiplier: float = 1.0
 ) -> Optional[TradeSignal]:
     """
-    SCENARIUL 2: BREAKOUT DE VOLUM CONFIRMAT (PE LIDERI DE PIATA)
-    - Pretul peste SMA 50
-    - Forta Relativa pozitiva fata de SPY (RS_vs_SPY >= 0)
-    - Inchidere peste maximul ultimelor 20 de zile
-    - Volum exploziv (>= VOLUME_SURGE_MULTIPLIER * Volume_SMA_20)
-    - Lumanare VERDE cu inchidere in top 40% din amplitudinea zilei
-    - Fara supra-extindere exagerata fata de EMA 20 (evita Climax Tops)
+    SCENARIUL 2: VCP VOLUME BREAKOUT (Bază strânsă >= 3 săptămâni + Volum >= 150% SMA 20)
+      - Contracție de volatilitate (ATR_Contraction <= 0.85 și Range_15D_Pct <= 8%)
+      - Spargere peste Swing_High_20 cu închidere în top 30% din lumânare și volum >= 1.5x media
+      - Fără supra-extindere (<= 7% față de EMA 20) și R:R >= MIN_RISK_REWARD_RATIO (1:2.0+)
     """
-    if len(df) < 30:
+    if len(df) < 205:
         return None
 
-    min_rr = min_rr if min_rr is not None else config.MIN_RISK_REWARD_RATIO
-    vol_mult = vol_mult if vol_mult is not None else getattr(config, "VOLUME_SURGE_MULTIPLIER", 1.25)
-    tp2_rr = getattr(config, "TP2_RISK_REWARD_RATIO", max(3.0, min_rr + 1.0))
+    required_min_rr = float(min_rr if min_rr is not None else config.MIN_RISK_REWARD_RATIO)
+    vol_mult = float(vol_mult if vol_mult is not None else getattr(config, "VOLUME_SURGE_MULTIPLIER", 1.50))
+    tp1_rr = float(getattr(config, "TP1_RISK_REWARD_RATIO", 1.5))
+    tp2_rr = max(required_min_rr, float(getattr(config, "TP2_RISK_REWARD_RATIO", 2.5)))
 
     last = df.iloc[-1]
+    ok_q, _ = _passes_common_stage2_quality(last)
+    if not ok_q:
+        return None
+
     open_p = float(last["Open"])
     high_p = float(last["High"])
     low_p = float(last["Low"])
     close_p = float(last["Close"])
-
-    sma_50 = float(last["SMA_50"])
     ema_20 = float(last["EMA_20"])
-    rsi = float(last["RSI_14"])
+    rsi_14 = float(last["RSI_14"])
+    atr_14 = float(last["ATR_14"])
     volume = float(last["Volume"])
-    vol_sma_20 = float(last.get("Volume_SMA_20", 0))
+    vol_sma_20 = float(last.get("Volume_SMA_20", 0.0))
     rs_vs_spy = float(last.get("RS_vs_SPY", 0.0))
+    atr_c = float(last.get("ATR_Contraction", 1.0))
+    range_15d = float(last.get("Range_15D_Pct", 12.0))
+    prior_20_high = float(last.get("Swing_High_20", np.nan))
+    swing_low_10 = float(last.get("Swing_Low_10_All", low_p))
 
-    if close_p < sma_50 or close_p < open_p:
+    if np.isnan(prior_20_high) or close_p <= open_p:
         return None
 
-    # Filtru Forta Relativa: Breakout-urile sunt permise doar pe Lideri (RS >= 0)
     if getattr(config, "USE_RELATIVE_STRENGTH", True):
-        min_rs_bo = getattr(config, "MIN_RS_VS_SPY_BREAKOUT", 0.0)
-        if not np.isnan(rs_vs_spy) and rs_vs_spy < min_rs_bo:
+        min_rs_bo = float(getattr(config, "MIN_RS_VS_SPY_BREAKOUT", 3.0))
+        max_rs = float(getattr(config, "MAX_RS_VS_SPY_PARABOLIC", 45.0))
+        if np.isnan(rs_vs_spy) or rs_vs_spy < min_rs_bo or rs_vs_spy > max_rs:
             return None
 
-    # Filtru Anti-Exhaustion: Nu cumparam spargeri deja extinse la >12% peste EMA 20
-    max_ext = getattr(config, "MAX_BREAKOUT_EXTENSION_EMA20", 0.12)
+    max_ext = float(getattr(config, "MAX_BREAKOUT_EXTENSION_EMA20", 0.07))
     if ema_20 > 0 and ((close_p - ema_20) / ema_20) > max_ext:
         return None
 
-    # Inchiderea trebuie sa fie in jumatatea/treimea superioara a lumanarii (forta reala)
-    day_range = high_p - low_p
-    if day_range > 0 and ((close_p - low_p) / day_range) < 0.60:
+    max_vcp_c = float(getattr(config, "MAX_VCP_ATR_CONTRACTION", 0.85))
+    max_base_rng = float(getattr(config, "MAX_VCP_BASE_RANGE_PCT", 8.0))
+    if atr_c > max_vcp_c or range_15d > max_base_rng:
         return None
 
-    prior_20_high = float(df["High"].iloc[-21:-1].max())
+    day_range = high_p - low_p
+    if day_range <= 0 or ((close_p - low_p) / day_range) < 0.70:
+        return None
+
     is_breakout = close_p > prior_20_high
     has_volume_surge = (vol_sma_20 > 0) and (volume >= vol_mult * vol_sma_20)
-    rsi_valid = 52.0 <= rsi <= 76.0
-
+    rsi_valid = 54.0 <= rsi_14 <= 73.0
     if not (is_breakout and has_volume_surge and rsi_valid):
         return None
 
-    recent_support = float(df["Low"].iloc[-3:].min())
-    stop_loss = round(max(prior_20_high * 0.98, recent_support), 2)
-    stop_dist_pct = (close_p - stop_loss) / close_p
-    if stop_loss >= close_p or stop_dist_pct < 0.025:
-        stop_loss = round(close_p * 0.972, 2)
-    elif stop_dist_pct > 0.055:
-        stop_loss = round(close_p * 0.945, 2)
-
+    atr_mult = float(getattr(config, "ATR_STOP_MULTIPLIER", 1.8))
+    stop_loss = round(min(swing_low_10, close_p - (atr_mult * atr_14)), 2)
     risk_per_share = round(close_p - stop_loss, 2)
     if risk_per_share <= 0:
         return None
 
-    tp1 = round(close_p + (min_rr * risk_per_share), 2)
+    stop_dist_pct = risk_per_share / close_p
+    min_sl_pct = float(getattr(config, "MIN_STOP_LOSS_PCT", 0.022))
+    max_sl_pct = float(getattr(config, "MAX_STOP_LOSS_PCT", 0.075))
+    if stop_dist_pct < min_sl_pct or stop_dist_pct > max_sl_pct:
+        return None
+
+    tp1 = round(close_p + (tp1_rr * risk_per_share), 2)
     tp2 = round(close_p + (tp2_rr * risk_per_share), 2)
+    actual_rr = round((tp2 - close_p) / risk_per_share, 2)
+    if actual_rr < required_min_rr:
+        return None
 
     sizing = calculate_position_size(
         close_p, stop_loss, total_capital,
@@ -346,8 +410,7 @@ def check_breakout_setup(
         return None
 
     vol_pct = int((volume / vol_sma_20) * 100) if vol_sma_20 > 0 else 0
-    rs_tag = f" | RS: {rs_vs_spy:+.1f}%" if not np.isnan(rs_vs_spy) else ""
-
+    sig_date = pd.Timestamp(df.index[-1]).strftime("%Y-%m-%d")
     return TradeSignal(
         ticker=ticker,
         action="BUY",
@@ -356,59 +419,81 @@ def check_breakout_setup(
         stop_loss=stop_loss,
         tp1=tp1,
         tp2=tp2,
-        risk_per_share=risk_per_share,
-        risk_reward_ratio=min_rr,
+        risk_per_share=sizing["risk_per_share"],
+        risk_reward_ratio=actual_rr,
         shares=sizing["shares"],
         position_cost=sizing["position_cost"],
-        reason=f"Setup BREAKOUT CONFIRMAT: Spargere maxim 20z (${prior_20_high:.2f}) cu volum ({vol_pct}%){rs_tag}.",
-        rs_score=round(rs_vs_spy, 2) if not np.isnan(rs_vs_spy) else 0.0
+        reason=f"VCP BREAKOUT CONFIRMAT: Spargere ${prior_20_high:.2f} pe volum {vol_pct}% (VCP {atr_c:.2f}, R:R 1:{actual_rr:.1f}).",
+        rs_score=round(rs_vs_spy, 2),
+        signal_date=sig_date,
+        signal_close=round(close_p, 2),
+        limit_entry=False
     )
 
 
-def _compute_composite_score(signal: TradeSignal) -> float:
+def compute_quality_composite_score(
+    rs_score: float,
+    atr_pct: float,
+    atr_contraction: float,
+    sector: str,
+    ml_confidence: float = 0.0,
+    ml_has_edge: bool = False,
+    news_score: float = 0.0,
+    use_live_sector_cache: bool = True
+) -> float:
     """
-    Calculeaza un scor compozit de atac (0 - 100) pentru prioritizarea semnalelor cand
-    apar mai multe oportunitati in aceeasi zi decat numarul de locuri in portofoliu:
-      - 42% pondere din increderea modelului ML (daca este activ)
-      - 38% pondere din Forta Relativa fata de SPY (RS_vs_SPY normalizat)
-      - Pana la +18 puncte Bonus de Rotatie Sectoriala & Alpha (prioritate maxima pe AI, Semiconductori, Cloud & Cyber)
-      - Bonus/Penalizare Catalizator Știri (-5 la +5 puncte)
+    Calculează Scorul Compozit de Calitate (0 - 100) bazat pe Momentum Ajustat la Risc (RS / ATR_Pct)
+    și contracția VCP. Modelul ML contribuie DOAR dacă a demonstrat putere predictivă reală
+    Out-of-Sample (ROC-AUC >= ML_MIN_OOS_ROC_AUC).
     """
-    ml_part = (signal.ml_confidence if signal.ml_confidence > 0 else 0.55) * 42.0
-    rs_clamped = max(-10.0, min(40.0, signal.rs_score))
-    rs_part = ((rs_clamped + 10.0) / 50.0) * 38.0
+    risk_adj_rs = (max(0.0, min(40.0, rs_score)) / max(1.5, atr_pct)) * 3.8  # ~0..65 puncte
+    vcp_points = max(0.0, min(18.0, (1.15 - min(1.15, atr_contraction)) * 36.0))
 
-    sec = getattr(signal, "sector", None) or config.get_ticker_sector(signal.ticker)
-    try:
-        from data_loader import get_live_sector_bonus
-        sec_bonus = get_live_sector_bonus(sec)
-    except Exception:
-        sec_bonus = config.get_sector_priority_bonus(sec) if hasattr(config, "get_sector_priority_bonus") else 0.0
+    if use_live_sector_cache:
+        try:
+            from data_loader import get_live_sector_bonus
+            sec_bonus = get_live_sector_bonus(sector)
+        except Exception:
+            sec_bonus = config.get_sector_priority_bonus(sector)
+    else:
+        sec_bonus = config.get_sector_priority_bonus(sector)
 
-    raw_news_score = getattr(signal, "news_score", 0.0)
-    news_val = float(raw_news_score) if isinstance(raw_news_score, (int, float)) else 0.0
-    news_bonus = max(-5.0, min(5.0, news_val * 2.5))
-    return round(max(0.0, min(100.0, ml_part + rs_part + sec_bonus + news_bonus)), 2)
+    news_bonus = max(-4.0, min(4.0, float(news_score) * 2.0))
+    base_score = risk_adj_rs + vcp_points + sec_bonus + news_bonus
+
+    if ml_has_edge and ml_confidence > 0:
+        ml_boost = (ml_confidence - 0.50) * 35.0
+        base_score = 0.75 * base_score + 0.25 * (50.0 + ml_boost)
+
+    return round(max(0.0, min(100.0, base_score)), 2)
 
 
-def _apply_ml_filter(ticker: str, df: pd.DataFrame, signal: "TradeSignal") -> "TradeSignal":
+def _apply_ml_filter(ticker: str, df: pd.DataFrame, signal: TradeSignal) -> TradeSignal:
     """
-    Filtru secundar ML: evalueaza calitatea semnalului cu modelul XGBoost.
+    Aplică filtrul ML DOAR dacă modelul are putere predictivă validată Out-of-Sample
+    (ROC-AUC >= config.ML_MIN_OOS_ROC_AUC). În caz contrar, nu introduce zgomot aleatoriu.
     """
-    ml_enabled = getattr(config, "ML_ENABLED", True)
-    if not ml_enabled:
-        signal.composite_score = _compute_composite_score(signal)
+    last = df.iloc[-1]
+    atr_pct = float(last.get("ATR_Pct", 2.5))
+    atr_c = float(last.get("ATR_Contraction", 1.0))
+
+    if not getattr(config, "ML_ENABLED", True):
+        signal.composite_score = compute_quality_composite_score(
+            signal.rs_score, atr_pct, atr_c, signal.sector, news_score=signal.news_score
+        )
         return signal
 
     try:
         from ml_predictor import get_predictor
         predictor = get_predictor()
-        if not predictor.is_ready:
-            signal.composite_score = _compute_composite_score(signal)
+        if not predictor.is_ready or not predictor.has_predictive_edge:
+            signal.composite_score = compute_quality_composite_score(
+                signal.rs_score, atr_pct, atr_c, signal.sector, news_score=signal.news_score
+            )
             return signal
 
         confidence, is_confident = predictor.predict(df)
-        threshold_pct = int(getattr(config, "ML_MIN_CONFIDENCE", 0.52) * 100)
+        threshold_pct = int(getattr(config, "ML_MIN_CONFIDENCE", 0.53) * 100)
 
         if not is_confident:
             return TradeSignal(
@@ -424,24 +509,27 @@ def _apply_ml_filter(ticker: str, df: pd.DataFrame, signal: "TradeSignal") -> "T
                 shares=0.0,
                 position_cost=0.0,
                 reason=(
-                    f"🤖 ML FILTER: Setup {signal.setup_type} detectat, dar încrederea "
-                    f"modelului este insuficientă ({confidence*100:.1f}% < {threshold_pct}% prag). "
-                    f"Semnal de calitate slabă — ignorat."
+                    f"🤖 ML FILTER: Setup {signal.setup_type} respins de modelul validat OOS "
+                    f"({confidence*100:.1f}% < {threshold_pct}%)."
                 ),
                 ml_confidence=confidence,
-                rs_score=signal.rs_score
+                rs_score=signal.rs_score,
+                sector=signal.sector,
+                signal_date=signal.signal_date
             )
 
         signal.ml_confidence = confidence
-        signal.composite_score = _compute_composite_score(signal)
-        signal.reason = (
-            f"{signal.reason} "
-            f"[🧠 ML: {confidence*100:.1f}% WIN | Scor: {signal.composite_score:.0f}/100]"
+        signal.composite_score = compute_quality_composite_score(
+            signal.rs_score, atr_pct, atr_c, signal.sector,
+            ml_confidence=confidence, ml_has_edge=True, news_score=signal.news_score
         )
+        signal.reason = f"{signal.reason} [🧠 ML OOS: {confidence*100:.1f}% | Scor: {signal.composite_score:.0f}/100]"
         return signal
 
     except Exception:
-        signal.composite_score = _compute_composite_score(signal)
+        signal.composite_score = compute_quality_composite_score(
+            signal.rs_score, atr_pct, atr_c, signal.sector, news_score=signal.news_score
+        )
         return signal
 
 
@@ -454,175 +542,101 @@ def analyze_ticker(
     market_regime: str = "POWER_TREND"
 ) -> TradeSignal:
     """
-    Evalueaza un ticker testand toate scenariile cu filtre de confirmare multi-timeframe,
-    Sector Rotation (focus pe AI & Tech), Forta Relativa (RS vs SPY), protectie Earnings,
-    Cooldown si Machine Learning.
+    Evaluează un simbol strict pe lumânări zilnice închise ('closed'), aplicând:
+      - Filtrul de Regim de Piață, Cooldown și Protecție Earnings (7 zile)
+      - Confluența Multi-Timeframe 1W + 1D Stage 2
+      - Setup 1 (Pullback Ordonat Stage 2) și Setup 2 (VCP Breakout în Power Trend)
+      - Filtrul de Știri negative severe și Poarta de Calitate ML
     """
     last_rs = float(df["RS_vs_SPY"].iloc[-1]) if len(df) > 0 and "RS_vs_SPY" in df.columns and not pd.isna(df["RS_vs_SPY"].iloc[-1]) else 0.0
     sector = config.get_ticker_sector(ticker)
 
-    # 0. Filtru Sector Rotation: Blocam sectoarele defensive/lente (Healthcare, Staples, Oil)
-    if getattr(config, "USE_SECTOR_ROTATION", True) and hasattr(config, "is_sector_blocked") and config.is_sector_blocked(sector):
+    if getattr(config, "USE_SECTOR_ROTATION", True) and config.is_sector_blocked(sector):
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=0.0,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
-            reason=f"🚫 SECTOR DEFENSIV EXCLUS ({sector}): Capitalul este rezervat exclusiv pentru sectoarele de Momentum (AI, Semiconductori, Cloud & Tech).",
-            rs_score=last_rs,
-            sector=sector
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=0.0, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+            reason=f"🚫 Sector exclus din configurație ({sector}).",
+            rs_score=last_rs, sector=sector
         )
 
-    if not is_market_bullish:
+    if not is_market_bullish or risk_multiplier <= 0:
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=0.0,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
-            reason="Piața generală (SPY) este în Regim Bearish (sub SMA 200 sau VIX extrem). Nu deschidem poziții Long.",
-            rs_score=last_rs,
-            sector=sector
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=0.0, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+            reason="Piața (SPY/QQQ/VIX) este în regim defensiv/corecție — Capital 100% protejat în Cash.",
+            rs_score=last_rs, sector=sector
         )
 
-    # Verificare Cooldown
     in_cooldown, cooldown_msg = is_in_cooldown(ticker)
     if in_cooldown:
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=0.0,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=0.0, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
             reason=f"🔒 BLOCAT ÎN CARANTINĂ: {cooldown_msg}",
-            rs_score=last_rs,
-            sector=sector
+            rs_score=last_rs, sector=sector
         )
 
-    # Verificare Earnings Risk (Anti-Binary Risk)
-    try:
-        from data_loader import check_earnings_risk
-        earnings_risky, earnings_msg = check_earnings_risk(
-            ticker,
-            buffer_days=getattr(config, "EARNINGS_BUFFER_DAYS", 7)
-        )
-        if earnings_risky:
-            return TradeSignal(
-                ticker=ticker,
-                action="NO_TRADE",
-                setup_type="NONE",
-                entry_price=0.0,
-                stop_loss=0.0,
-                tp1=0.0,
-                tp2=0.0,
-                risk_per_share=0.0,
-                risk_reward_ratio=0.0,
-                shares=0.0,
-                position_cost=0.0,
-                reason=earnings_msg,
-                rs_score=last_rs,
-                sector=sector
-            )
-    except Exception:
-        pass
-
-    if len(df) < 60:
+    if len(df) < 205:
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=0.0,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
-            reason="Date istorice insuficiente pentru calcul.",
-            rs_score=last_rs,
-            sector=sector
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=0.0, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+            reason="Date istorice insuficiente (< 205 zile închise pentru SMA 200).",
+            rs_score=last_rs, sector=sector
         )
 
-    # Verificare Confluență Multi-Timeframe (1W - Grafic Săptămânal)
     weekly_ok, weekly_reason, _ = check_weekly_confluence(df)
     if not weekly_ok:
         last_close = float(df["Close"].iloc[-1])
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=last_close,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=last_close, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
             reason=f"📉 MULTI-TIMEFRAME (1W): {weekly_reason}",
-            rs_score=last_rs,
-            sector=sector
+            rs_score=last_rs, sector=sector
         )
 
-    # Filtru de Selectivitate Sectoriala: Sectoarele secundare (ex: FINANCIALS) au voie sa intre
-    # DOAR daca sunt Super-Lideri cu Forta Relativa ridicata (RS >= +5%), ca sa nu ocupe locurile AI/Tech!
-    tier1_sectors = {"SEMICONDUCTORS", "SOFTWARE_CLOUD", "CYBERSECURITY", "AI_POWER_INFRA"}
-    if getattr(config, "USE_SECTOR_ROTATION", True) and sector not in tier1_sectors and last_rs < 3.5:
+    ok_stage2, stage2_reason = _passes_common_stage2_quality(df.iloc[-1])
+    if not ok_stage2:
         last_close = float(df["Close"].iloc[-1])
         return TradeSignal(
-            ticker=ticker,
-            action="NO_TRADE",
-            setup_type="NONE",
-            entry_price=last_close,
-            stop_loss=0.0,
-            tp1=0.0,
-            tp2=0.0,
-            risk_per_share=0.0,
-            risk_reward_ratio=0.0,
-            shares=0.0,
-            position_cost=0.0,
-            reason=f"🎯 FOCUS AI/TECH: Simbolul din {sector} are RS prea mic ({last_rs:+.1f}% < +3.5%) pentru a concura cu liderii Tech/AI.",
-            rs_score=last_rs,
-            sector=sector
+            ticker=ticker, action="NO_TRADE", setup_type="NONE",
+            entry_price=last_close, stop_loss=0.0, tp1=0.0, tp2=0.0,
+            risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+            reason=stage2_reason,
+            rs_score=last_rs, sector=sector
         )
 
-    # 1. Testare Scenariul 1: Pullback Confirmat la EMA 20
+    # 1. Testare Scenariul 1: Pullback Ordonat în Stage 2
     candidate = check_pullback_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
 
-    # 2. Testare Scenariul 2: Breakout de Volum (in Cautious Uptrend cerem RS >= +5% pentru extra siguranta)
-    if not candidate:
-        breakout = check_breakout_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
-        if breakout:
-            if market_regime == "CAUTIOUS_UPTREND" and breakout.rs_score < 5.0:
-                pass  # In piata precauta permitem breakout doar pe super-lideri (RS >= +5%)
-            else:
-                candidate = breakout
+    # 2. Testare Scenariul 2: VCP Breakout (opțional din config, doar în POWER_TREND)
+    if not candidate and market_regime == "POWER_TREND" and getattr(config, "ENABLE_BREAKOUT_SETUP", False):
+        candidate = check_breakout_setup(ticker, df, total_capital, risk_multiplier=risk_multiplier)
 
     if candidate:
-        candidate.sector = sector
-        candidate.reason = f"{candidate.reason} [📅 1W Stage 2]"
+        # Verificăm riscul de Earnings doar pentru candidații tehnici valizi (evită apeluri API lente inutile)
+        try:
+            from data_loader import check_earnings_risk
+            earnings_risky, earnings_msg = check_earnings_risk(
+                ticker, buffer_days=getattr(config, "EARNINGS_BUFFER_DAYS", 7)
+            )
+            if earnings_risky:
+                return TradeSignal(
+                    ticker=ticker, action="NO_TRADE", setup_type="NONE",
+                    entry_price=candidate.entry_price, stop_loss=0.0, tp1=0.0, tp2=0.0,
+                    risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+                    reason=earnings_msg, rs_score=last_rs, sector=sector
+                )
+        except Exception:
+            pass
 
-        # 3. Verificare Catalizatori Știri & Sentiment Live (Alpaca News API)
+        candidate.sector = sector
+        candidate.reason = f"{candidate.reason} [📅 1W+1D Stage 2]"
+
         try:
             from data_loader import check_news_sentiment
             is_blocked, news_score, news_label, news_headline = check_news_sentiment(ticker)
@@ -632,23 +646,12 @@ def analyze_ticker(
 
             if is_blocked:
                 return TradeSignal(
-                    ticker=ticker,
-                    action="NO_TRADE",
-                    setup_type="NONE",
-                    entry_price=candidate.entry_price,
-                    stop_loss=0.0,
-                    tp1=0.0,
-                    tp2=0.0,
-                    risk_per_share=0.0,
-                    risk_reward_ratio=0.0,
-                    shares=0.0,
-                    position_cost=0.0,
+                    ticker=ticker, action="NO_TRADE", setup_type="NONE",
+                    entry_price=candidate.entry_price, stop_loss=0.0, tp1=0.0, tp2=0.0,
+                    risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
                     reason=f"📰 NEWS RISK FILTER: Catalizator negativ sever ({news_label}) — {news_headline}",
-                    rs_score=last_rs,
-                    sector=candidate.sector,
-                    news_sentiment=news_label,
-                    news_headline=news_headline,
-                    news_score=news_score,
+                    rs_score=last_rs, sector=sector,
+                    news_sentiment=news_label, news_headline=news_headline, news_score=news_score
                 )
         except Exception:
             pass
@@ -656,32 +659,18 @@ def analyze_ticker(
         return _apply_ml_filter(ticker, df, candidate)
 
     last = df.iloc[-1]
-    close = float(last["Close"])
-    open_p = float(last["Open"])
-    sma_50 = float(last["SMA_50"])
-    rsi = float(last["RSI_14"])
+    close_p = float(last["Close"])
+    rsi_14 = float(last["RSI_14"])
+    rsi_4 = float(last.get("RSI_4", 50.0))
 
-    if close < sma_50:
-        reason = f"Sub trendul principal (Close {close:.2f} < SMA 50 {sma_50:.2f})"
-    elif getattr(config, "USE_RELATIVE_STRENGTH", True) and last_rs < getattr(config, "MIN_RS_VS_SPY_PULLBACK", -5.0):
-        reason = f"Forță relativă slabă față de S&P 500 (RS: {last_rs:+.1f}%)"
-    elif close < open_p:
-        reason = "Lumânare roșie în scădere (fără ricoșeu sau confirmare de cumpărători)"
+    if last_rs < float(getattr(config, "MIN_RS_VS_SPY_PULLBACK", 2.0)):
+        reason = f"Forță relativă sub pragul liderilor (RS: {last_rs:+.1f}%)"
     else:
-        reason = f"În consolidare fără semnal (RSI: {rsi:.1f} | RS: {last_rs:+.1f}%)"
+        reason = f"În trend Stage 2, așteptăm pullback ordonat (RSI4: {rsi_4:.0f} | RSI14: {rsi_14:.1f} | RS: {last_rs:+.1f}%)"
 
     return TradeSignal(
-        ticker=ticker,
-        action="NO_TRADE",
-        setup_type="NONE",
-        entry_price=close,
-        stop_loss=0.0,
-        tp1=0.0,
-        tp2=0.0,
-        risk_per_share=0.0,
-        risk_reward_ratio=0.0,
-        shares=0.0,
-        position_cost=0.0,
-        reason=reason,
-        rs_score=last_rs
+        ticker=ticker, action="NO_TRADE", setup_type="NONE",
+        entry_price=close_p, stop_loss=0.0, tp1=0.0, tp2=0.0,
+        risk_per_share=0.0, risk_reward_ratio=0.0, shares=0.0, position_cost=0.0,
+        reason=reason, rs_score=last_rs, sector=sector
     )

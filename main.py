@@ -290,7 +290,8 @@ def run_smart_scan(trader: AlpacaTrader):
                     stop_loss_price=sig.stop_loss,
                     take_profit_price=sig.tp1,
                     tp2_price=sig.tp2,
-                    setup_type=sig.setup_type
+                    setup_type=sig.setup_type,
+                    signal_date=getattr(sig, "signal_date", "")
                 )
         else:
             print("ℹ️ Plasarea ordinelor a fost anulată.")
@@ -299,16 +300,20 @@ def run_smart_scan(trader: AlpacaTrader):
 
 
 def run_backtest_all():
-    """Rulează backtesting individual + simulare realistă de portofoliu cu capital partajat."""
+    """Rulează backtesting individual + simulare realistă de portofoliu (Zero Look-Ahead + Costuri Reale)."""
     from ml_predictor import ensure_ml_ready
     pred = ensure_ml_ready(max_age_days=7)
-    use_ml = pred.is_ready
-    mode_str = "cu FILTRU ML (Out-of-Sample)" if use_ml else "Standard (fără filtru ML)"
-    print(f"\n📊 Rulare Backtest ({mode_str}) pe ultimii 2 ani pentru {len(config.WATCHLIST)} companii...")
-    print(f"   Capital Inițial: ${config.DEFAULT_SIMULATED_CAPITAL:,.2f} | Risc per trade: {config.RISK_PER_TRADE_PERCENT*100}% | Slippage: {config.BACKTEST_SLIPPAGE_PCT*100:.2f}%")
+    use_ml = pred.has_predictive_edge
+    mode_str = "cu FILTRU ML Validat OOS" if use_ml else "Cantitativ Pur (fără zgomot ML)"
+    total_cost_bps = (config.BACKTEST_SPREAD_PCT * 0.5 + config.BACKTEST_SLIPPAGE_PCT) * 10000
+    print(f"\n📊 Rulare Backtest V2 Zero-Lookahead ({mode_str}) pe 5 ani pentru {len(config.WATCHLIST)} companii...")
+    print(
+        f"   Capital: ${config.DEFAULT_SIMULATED_CAPITAL:,.2f} | Risc/trade: {config.RISK_PER_TRADE_PERCENT*100:.2f}% | "
+        f"Cost execuție: {total_cost_bps:.1f} bps/sens + ${config.BACKTEST_COMMISSION_USD:.2f}/ordin"
+    )
 
     try:
-        spy_df = fetch_stock_data(config.BENCHMARK_TICKER)
+        spy_df = fetch_stock_data(config.BENCHMARK_TICKER, period="5y", closed_only=True)
     except Exception as e:
         print(f"⚠️ Nu s-a putut descărca SPY pentru backtest ({e}), rulare fără filtru SPY.")
         spy_df = None
@@ -320,7 +325,7 @@ def run_backtest_all():
 
     for ticker in config.WATCHLIST:
         try:
-            df = fetch_stock_data(ticker, spy_df=spy_df)
+            df = fetch_stock_data(ticker, period="5y", spy_df=spy_df, closed_only=True)
             stock_dfs[ticker] = df
             tester = Backtester(
                 initial_capital=config.DEFAULT_SIMULATED_CAPITAL,
@@ -332,7 +337,7 @@ def run_backtest_all():
             if "error" not in res:
                 total_trades_all += res["total_trades"]
                 total_pnl_all += res["total_pnl"]
-                pf_str = f"{res['profit_factor']:.2f}" if res["profit_factor"] < 100 else "Max"
+                pf_str = f"{res['profit_factor']:.2f}" if res["profit_factor"] < 90 else "Max"
                 results_table.append([
                     res["ticker"],
                     f"{res.get('total_positions', res['total_trades'])} ({res['total_trades']} lot)",
@@ -341,22 +346,22 @@ def run_backtest_all():
                     f"${res['total_pnl']:+,.2f}",
                     f"{res['total_return_pct']:+,.2f}%",
                     pf_str,
-                    f"{res.get('sharpe_ratio', 0.0):.2f}",
-                    f"{res['max_drawdown_pct']:.1f}%"
+                    f"{res.get('sharpe_ratio', 0.0):.2f} / {res.get('sortino_ratio', 0.0):.2f}",
+                    f"-{res['max_drawdown_pct']:.1f}%"
                 ])
         except Exception as e:
             print(f"Eroare backtest {ticker}: {e}")
 
     headers = [
         "Simbol", "Poziții (Loturi)", "Win Rate Poz.", "Expectancy", "Profit ($)",
-        "Randament (%)", "Profit Factor", "Sharpe", "Max DD"
+        "Randament (%)", "Profit Factor", "Sharpe / Sortino", "Max DD"
     ]
     print(f"\n📋 1. PERFORMANȚĂ INDIVIDUALĂ PE SIMBOL (${config.DEFAULT_SIMULATED_CAPITAL:,.0f} per simbol):")
     print(tabulate(results_table, headers=headers, tablefmt="grid"))
     print(f"  • Total Loturi Simulate Individual: {total_trades_all} | PnL Cumulat: ${total_pnl_all:+,.2f}")
 
     if stock_dfs:
-        print(f"\n🏦 2. SIMULARE REALISTĂ DE PORTOFOLIU (Cont Unic ${config.DEFAULT_SIMULATED_CAPITAL:,.2f}, Max {config.MAX_OPEN_POSITIONS} poziții simultane cu risc):")
+        print(f"\n🏦 2. SIMULARE REALISTĂ DE PORTOFOLIU (Cont Unic ${config.DEFAULT_SIMULATED_CAPITAL:,.2f}, Max {config.MAX_OPEN_POSITIONS} poziții cu risc):")
         port_tester = Backtester(
             initial_capital=config.DEFAULT_SIMULATED_CAPITAL,
             risk_per_trade=config.RISK_PER_TRADE_PERCENT,
@@ -364,21 +369,21 @@ def run_backtest_all():
         )
         port_res = port_tester.run_portfolio_backtest(stock_dfs, spy_df=spy_df)
         if "error" not in port_res:
-            pf_p = f"{port_res['profit_factor']:.2f}" if port_res["profit_factor"] < 100 else "Max"
+            pf_p = f"{port_res['profit_factor']:.2f}" if port_res["profit_factor"] < 90 else "Max"
             port_table = [[
                 f"${port_res['initial_capital']:,.2f}",
                 f"${port_res['final_capital']:,.2f}",
                 f"${port_res['total_pnl']:+,.2f} ({port_res['total_return_pct']:+.2f}%)",
                 f"{port_res['total_positions']} ({port_res['total_trades']} loturi)",
-                f"{port_res['position_win_rate']}%",
+                f"{port_res['position_win_rate']}% ({port_res['win_rate']}% lot)",
                 f"{port_res['expectancy_r']:+.2f}R",
                 pf_p,
                 f"{port_res['sharpe_ratio']:.2f} / {port_res['sortino_ratio']:.2f}",
-                f"{port_res['max_drawdown_pct']:.2f}%"
+                f"-{port_res['max_drawdown_pct']:.2f}%"
             ]]
             port_headers = [
-                "Capital Start", "Capital Final", "Profit Net (%)", "Poziții",
-                "Win Rate", "Expectancy", "Profit Factor", "Sharpe / Sortino", "Max Drawdown"
+                "Capital Start", "Capital Final", "Profit Net (%)", "Poziții (Tranz.)",
+                "Win Rate Poz (Lot)", "Expectancy", "Profit Factor", "Sharpe / Sortino", "Max Drawdown"
             ]
             print(tabulate(port_table, headers=port_headers, tablefmt="grid"))
 

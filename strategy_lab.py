@@ -116,9 +116,14 @@ def run_alternative_strategy(
     capital = initial_capital
     equity_curve = [initial_capital]
     trades = []
-    slippage = getattr(config, "BACKTEST_SLIPPAGE_PCT", 0.0005)
+    slippage = (
+        float(getattr(config, "BACKTEST_SPREAD_PCT", 0.0008)) * 0.5
+        + float(getattr(config, "BACKTEST_SLIPPAGE_PCT", 0.0006))
+    )
+    comm_usd = float(getattr(config, "BACKTEST_COMMISSION_USD", 0.02))
 
     in_position = False
+    pending_entry = None
     entry_price = 0.0
     stop_loss = 0.0
     initial_risk = 0.0
@@ -127,7 +132,7 @@ def run_alternative_strategy(
     entry_date = None
     peak_price = 0.0
 
-    for i in range(200, len(df)):
+    for i in range(205, len(df)):
         row = df.iloc[i]
         prev_row = df.iloc[i - 1]
         date = df.index[i]
@@ -153,52 +158,74 @@ def run_alternative_strategy(
         macd_hist = float(row.get("MACD_Hist", 0.0))
         prev_macd_hist = float(prev_row.get("MACD_Hist", 0.0))
 
+        # Execuție la Open-ul barei curente `i` pentru semnalul confirmat la închiderea barei `i - 1` (Zero Look-Ahead)
+        if (not in_position) and (pending_entry is not None):
+            sig_sl = pending_entry["sl"]
+            rr_t = pending_entry["rr"]
+            if open_p > sig_sl * 1.005 and open_p <= pending_entry["sig_close"] * (1.0 + float(getattr(config, "MAX_ENTRY_GAP_PCT", 0.012))):
+                ep_cand = round(open_p * (1.0 + slippage), 4)
+                ir_cand = round(ep_cand - sig_sl, 4)
+                max_sl_pct = float(getattr(config, "MAX_STOP_LOSS_PCT", 0.075))
+                if ir_cand > 0 and (ir_cand / ep_cand) <= max_sl_pct:
+                    dollar_risk = capital * risk_per_trade
+                    sh_cand = dollar_risk / ir_cand
+                    max_cap = capital * float(getattr(config, "MAX_SINGLE_POSITION_PCT", 0.33))
+                    if sh_cand * ep_cand > max_cap:
+                        sh_cand = max_cap / ep_cand
+                    sh_cand = round(sh_cand, 4)
+                    if sh_cand > 0 and (sh_cand * ep_cand + comm_usd) <= capital:
+                        capital -= comm_usd
+                        in_position = True
+                        entry_price = ep_cand
+                        stop_loss = sig_sl
+                        initial_risk = ir_cand
+                        tp_target = round(entry_price + (rr_t * initial_risk), 2)
+                        shares = sh_cand
+                        peak_price = entry_price
+                        entry_date = date
+            pending_entry = None
+
         if in_position:
             peak_price = max(peak_price, high_p)
             exit_triggered = False
             exit_price = close_p
             exit_type = ""
 
-            # 1. Verificare Stop-Loss
             if low_p <= stop_loss:
-                raw_exit = min(stop_loss, open_p)
-                exit_price = round(raw_exit * (1.0 - slippage), 2)
+                raw_exit = min(stop_loss, open_p) if date > entry_date else stop_loss
+                exit_price = round(raw_exit * (1.0 - slippage), 4)
                 exit_type = "STOP_LOSS" if exit_price < entry_price else "TRAILING_STOP"
                 exit_triggered = True
 
-            # 2. Reguli specifice de ieșire în profit pentru fiecare strategie
             elif strategy_key == "RSI2_CONNORS":
-                # Connors RSI(2): Iese când prețul închide peste EMA 5 sau atinge TP 2.5R
                 if close_p >= ema_5 or high_p >= tp_target:
-                    exit_price = round((tp_target if high_p >= tp_target else close_p) * (1.0 - slippage), 2)
+                    exit_price = round((tp_target if high_p >= tp_target else close_p) * (1.0 - slippage), 4)
                     exit_type = "EMA5_REVERSION_EXIT"
                     exit_triggered = True
 
             elif strategy_key == "DONCHIAN_TURTLE":
-                # Turtle: Trailing Stop pe minimul ultimelor 10 zile (sau Chandelier 5%)
                 new_stop = round(max(swing_low_10 * 0.995, peak_price * 0.945), 2)
                 if new_stop > stop_loss and new_stop < close_p:
                     stop_loss = new_stop
                 if high_p >= tp_target:
-                    exit_price = round(tp_target * (1.0 - slippage), 2)
+                    exit_price = round(tp_target * (1.0 - slippage), 4)
                     exit_type = "TP_RUNNER_HIT"
                     exit_triggered = True
 
             else:
-                # MINERVINI_VCP & MACD_MOMENTUM: Auto-Breakeven la +1R, TP la 2.5R, Trail sub EMA 20
-                if high_p >= entry_price + initial_risk and stop_loss < entry_price:
-                    stop_loss = round(entry_price * 1.002, 2)
                 if high_p >= entry_price + (1.5 * initial_risk):
+                    if stop_loss < entry_price:
+                        stop_loss = round(entry_price * 1.002, 2)
                     trail_ema = round(ema_20 * 0.985, 2)
                     if trail_ema > stop_loss and trail_ema < close_p:
                         stop_loss = trail_ema
                 if high_p >= tp_target:
-                    exit_price = round(tp_target * (1.0 - slippage), 2)
+                    exit_price = round(tp_target * (1.0 - slippage), 4)
                     exit_type = "TAKE_PROFIT"
                     exit_triggered = True
 
             if exit_triggered:
-                pnl = (exit_price - entry_price) * shares
+                pnl = (exit_price - entry_price) * shares - comm_usd
                 capital += pnl
                 r_mult = (exit_price - entry_price) / initial_risk if initial_risk > 0 else 0.0
                 trades.append({
@@ -207,8 +234,8 @@ def run_alternative_strategy(
                     "exit_date": date,
                     "setup_type": strategy_key,
                     "type": exit_type,
-                    "entry_price": entry_price,
-                    "exit_price": exit_price,
+                    "entry_price": round(entry_price, 2),
+                    "exit_price": round(exit_price, 2),
                     "shares": shares,
                     "pnl": round(pnl, 2),
                     "pnl_pct": round(((exit_price - entry_price) / entry_price) * 100.0, 2),
@@ -228,18 +255,16 @@ def run_alternative_strategy(
                 continue
 
             signal_triggered = False
-            sl_candidate = close_p * 0.96
-            rr_target = 2.5
+            sl_candidate = close_p * 0.95
+            rr_target = max(2.0, float(getattr(config, "MIN_RISK_REWARD_RATIO", 2.0)))
 
             if strategy_key == "RSI2_CONNORS":
-                # Trend ascendent major + supravânzare severă pe 2 zile (RSI_2 < 15)
                 if close_p > sma_200 and close_p > sma_50 * 0.97 and rsi_2 < 15.0:
                     signal_triggered = True
                     sl_candidate = close_p - (1.8 * atr_14)
                     rr_target = 2.2
 
             elif strategy_key == "MINERVINI_VCP":
-                # Stage 2 Uptrend + Volatilitate comprimată + Spargere maxim 10 zile pe volum
                 vcp_tight = atr_contraction <= 0.95 or float(prev_row.get("ATR_Contraction", 1.0)) <= 0.92
                 vol_ok = vol_sma > 0 and vol >= 1.15 * vol_sma
                 if (
@@ -251,11 +276,10 @@ def run_alternative_strategy(
                     and 50.0 <= rsi_14 <= 75.0
                 ):
                     signal_triggered = True
-                    sl_candidate = min(float(df["Low"].iloc[max(0, i - 3):i + 1].min()), close_p - 1.2 * atr_14)
+                    sl_candidate = min(float(df["Low"].iloc[max(0, i - 3):i + 1].min()), close_p - 1.5 * atr_14)
                     rr_target = 2.8
 
             elif strategy_key == "DONCHIAN_TURTLE":
-                # Spargere maxim 20 zile în trend puternic
                 if (
                     close_p > swing_high_20
                     and ema_20 > sma_50 > sma_200
@@ -263,11 +287,10 @@ def run_alternative_strategy(
                     and vol_sma > 0 and vol >= 1.10 * vol_sma
                 ):
                     signal_triggered = True
-                    sl_candidate = max(swing_low_10, close_p - 2.0 * atr_14)
-                    rr_target = 4.0
+                    sl_candidate = min(swing_low_10, close_p - 1.8 * atr_14)
+                    rr_target = 3.5
 
             elif strategy_key == "MACD_MOMENTUM":
-                # Încrucișare / Impuls MACD + EMA 10 > EMA 20 > SMA 50
                 macd_cross = (macd_hist > 0 and prev_macd_hist <= 0) or (
                     macd_hist > prev_macd_hist > 0 and float(prev_row["Close"]) <= float(prev_row["EMA_10"]) and close_p > ema_10
                 )
@@ -279,44 +302,19 @@ def run_alternative_strategy(
                     and close_p > open_p
                 ):
                     signal_triggered = True
-                    sl_candidate = min(ema_20 * 0.985, close_p - 1.5 * atr_14)
+                    sl_candidate = min(ema_20 * 0.985, close_p - 1.6 * atr_14)
                     rr_target = 2.5
 
-            if not signal_triggered:
-                equity_curve.append(capital)
-                continue
+            if signal_triggered:
+                stop_dist = (close_p - sl_candidate) / close_p
+                min_sl = float(getattr(config, "MIN_STOP_LOSS_PCT", 0.022))
+                max_sl = float(getattr(config, "MAX_STOP_LOSS_PCT", 0.075))
+                if min_sl <= stop_dist <= max_sl:
+                    pending_entry = {"sig_close": close_p, "sl": round(sl_candidate, 2), "rr": rr_target}
 
-            entry_price = round(close_p * (1.0 + slippage), 2)
-            stop_dist = (entry_price - sl_candidate) / entry_price
-            if sl_candidate >= entry_price or stop_dist < 0.025:
-                stop_loss = round(entry_price * 0.972, 2)
-            elif stop_dist > 0.055:
-                stop_loss = round(entry_price * 0.945, 2)
-            else:
-                stop_loss = round(sl_candidate, 2)
-
-            initial_risk = round(entry_price - stop_loss, 2)
-            if initial_risk <= 0:
-                equity_curve.append(capital)
-                continue
-
-            tp_target = round(entry_price + (rr_target * initial_risk), 2)
-            dollar_risk = capital * risk_per_trade
-            shares = round(dollar_risk / initial_risk, 2)
-            max_cap = capital / config.MAX_OPEN_POSITIONS
-            if shares * entry_price > max_cap:
-                shares = round(max_cap / entry_price, 2)
-
-            if shares <= 0:
-                equity_curve.append(capital)
-                continue
-
-            in_position = True
-            peak_price = entry_price
-            entry_date = date
             equity_curve.append(capital)
 
-    # Calcul metrici finale
+    # Calcul metrici finale (inclusiv Sharpe și Sortino)
     total_trades = len(trades)
     wins = [t for t in trades if t["pnl"] > 0]
     losses = [t for t in trades if t["pnl"] <= 0]
@@ -324,7 +322,8 @@ def run_alternative_strategy(
     gross_profit = sum(t["pnl"] for t in wins)
     gross_loss = abs(sum(t["pnl"] for t in losses))
     pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_profit > 0 else 0.0)
-    total_pnl = round(capital - initial_capital, 2)
+    final_eq = float(equity_curve[-1]) if equity_curve else capital
+    total_pnl = round(final_eq - initial_capital, 2)
     total_return_pct = round((total_pnl / initial_capital) * 100.0, 2)
     expectancy_r = round(float(np.mean([t["r_multiple"] for t in trades])), 2) if trades else 0.0
 
@@ -335,14 +334,18 @@ def run_alternative_strategy(
 
     daily_ret = eq_series.pct_change().dropna()
     sharpe = 0.0
+    sortino = 0.0
     if len(daily_ret) > 10 and daily_ret.std() > 0:
         sharpe = round(float((daily_ret.mean() / daily_ret.std()) * np.sqrt(252)), 2)
+        down = daily_ret[daily_ret < 0]
+        down_std = float(down.std()) if len(down) > 2 else float(daily_ret.std())
+        sortino = round(float((daily_ret.mean() / down_std) * np.sqrt(252)), 2) if down_std > 0 else sharpe
 
     return {
         "ticker": ticker,
         "strategy": strategy_key,
         "initial_capital": initial_capital,
-        "final_capital": round(capital, 2),
+        "final_capital": round(final_eq, 2),
         "total_pnl": total_pnl,
         "total_return_pct": total_return_pct,
         "total_trades": total_trades,
@@ -353,6 +356,7 @@ def run_alternative_strategy(
         "expectancy_r": expectancy_r,
         "max_drawdown_pct": max_dd,
         "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
         "trades_list": trades,
         "equity_curve": [round(x, 2) for x in equity_curve]
     }
@@ -758,13 +762,13 @@ def run_strategy_lab(custom_tickers: Optional[List[str]] = None, open_browser: b
 
     # Agregare globală per strategie
     summary_agg = {
-        k: {"pnl": 0.0, "ret_list": [], "wr_list": [], "pf_list": [], "exp_list": [], "dd_list": [], "trades": 0}
+        k: {"pnl": 0.0, "ret_list": [], "wr_list": [], "pf_list": [], "exp_list": [], "sh_list": [], "so_list": [], "dd_list": [], "trades": 0}
         for k in STRATEGIES_INFO
     }
 
     for ticker in tickers:
         try:
-            df = fetch_stock_data(ticker, spy_df=spy_df)
+            df = fetch_stock_data(ticker, spy_df=spy_df, closed_only=True)
             tickers_data[ticker] = df
             all_results[ticker] = {}
 
@@ -779,6 +783,8 @@ def run_strategy_lab(custom_tickers: Optional[List[str]] = None, open_browser: b
                     if res["profit_factor"] < 90:
                         agg["pf_list"].append(res["profit_factor"])
                     agg["exp_list"].append(res.get("expectancy_r", 0.0))
+                    agg["sh_list"].append(res.get("sharpe_ratio", 0.0))
+                    agg["so_list"].append(res.get("sortino_ratio", 0.0))
                     agg["dd_list"].append(res["max_drawdown_pct"])
                     agg["trades"] += res.get("total_positions", res["total_trades"])
         except Exception as e:
@@ -792,6 +798,8 @@ def run_strategy_lab(custom_tickers: Optional[List[str]] = None, open_browser: b
         avg_wr = np.mean(agg["wr_list"]) if agg["wr_list"] else 0.0
         avg_pf = np.mean(agg["pf_list"]) if agg["pf_list"] else 0.0
         avg_exp = np.mean(agg["exp_list"]) if agg["exp_list"] else 0.0
+        avg_sh = np.mean(agg["sh_list"]) if agg["sh_list"] else 0.0
+        avg_so = np.mean(agg["so_list"]) if agg["so_list"] else 0.0
         avg_dd = np.mean(agg["dd_list"]) if agg["dd_list"] else 0.0
 
         table_rows.append([
@@ -801,13 +809,14 @@ def run_strategy_lab(custom_tickers: Optional[List[str]] = None, open_browser: b
             f"{avg_wr:.1f}%",
             f"{avg_pf:.2f}",
             f"{avg_exp:+.2f}R",
+            f"{avg_sh:.2f} / {avg_so:.2f}",
             f"-{avg_dd:.2f}%",
             agg["trades"]
         ])
 
     headers = [
-        "Strategie Testată", "Profit Cumulat ($)", "Randament Mediu/Simbol",
-        "Win Rate Mediu", "Profit Factor", "Expectancy", "Max DD Mediu", "Total Poziții"
+        "Strategie Testată", "Profit Cumulat ($)", "Randament Mediu",
+        "Win Rate Mediu", "Profit Factor", "Expectancy", "Sharpe / Sortino", "Max DD Mediu", "Total Poziții"
     ]
     print("\n🏆 CLASAMENT COMPARATIV AL CELOR 5 STRATEGII:")
     print(tabulate(table_rows, headers=headers, tablefmt="grid"))
