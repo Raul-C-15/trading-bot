@@ -194,6 +194,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 AUTO_TRADE = os.getenv("AUTO_TRADE", "True").strip().lower() in ("true", "1", "yes")
 SCAN_INTERVAL_MINUTES = 15
+CLOUD_STANDBY_MAX_HOURS = 17         # Mentine containerul Cloud in Standby pana la 17h inainte de deschiderea bursei SUA
 
 
 def validate_runtime_environment(require_broker: bool = False) -> dict:

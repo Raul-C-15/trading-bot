@@ -60,7 +60,7 @@ def is_us_power_hour(trader: AlpacaTrader) -> bool:
     """
     if trader.is_connected and trader.client:
         try:
-            clock = trader.client.get_clock()
+            clock = trader._api_call(trader.client.get_clock)
             if clock.is_open and clock.timestamp.hour == 15:
                 return True
         except Exception:
@@ -448,6 +448,8 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     - Scanare la 15 min + SL/TP la 60s + Power Hour (22:00-23:00 RO) -> Raport EOD la 23:00 RO
     - Raspunde INSTANT la comenzile Telegram (/status, /positions, /scan, /watchlist) si butoane!
     """
+    global ALERTED_TODAY
+    ALERTED_TODAY.update(load_telegram_state().get("alerted_today", {}))
     listener = TelegramListener(trader)
     listener.poll_once(wait_seconds=2)
 
@@ -474,7 +476,7 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     if os.getenv("GITHUB_EVENT_NAME") in ("workflow_dispatch", "push") and os.getenv("IS_CONTINUATION_SESSION") != "true":
         try:
             summary = trader.get_portfolio_summary()
-            clock_info = "🟢 DESCHISĂ" if (trader.is_connected and trader.client and trader.client.get_clock().is_open) else "🌙 ÎNCHISĂ (Deschide la 16:30 RO — Mod Standby Activ)"
+            clock_info = "🟢 DESCHISĂ" if (trader.is_connected and trader.client and trader._api_call(trader.client.get_clock).is_open) else "🌙 ÎNCHISĂ (Deschide la 16:30 RO — Mod Standby Activ)"
             send_telegram_message(
                 f"🟢 *Botul a pornit în Cloud (Sesiune Activă)!*\n\n"
                 f"🏛️ *Bursa SUA:* {clock_info}\n"
@@ -500,8 +502,14 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                 seconds_to_open = (clock.next_open - clock.timestamp).total_seconds()
                 opens_today_et = (clock.next_open.date() == market_time.date())
 
-                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau suntem dupa 16:00 ET (23:00 RO) -> Trimitem Raport EOD si oprim!
-                if was_open_during_session or (not opens_today_et and market_time.hour in (16, 17, 18, 19, 20)):
+                # Cazul 1: Piata tocmai s-a inchis in timpul acestei sesiuni sau tocmai am trecut de ora inchiderii (16:00 - 17:15 ET) -> Trimitem Raport EOD si oprim!
+                today_check = market_time.strftime("%Y-%m-%d")
+                if was_open_during_session or (
+                    not opens_today_et
+                    and market_time.weekday() < 5
+                    and market_time.hour in (16, 17)
+                    and ALERTED_TODAY.get("_EOD_SENT_") != today_check
+                ):
                     run_eod_report(trader)
                     if os.getenv("GITHUB_ACTIONS"):
                         print("🔔 Sesiunea Cloud de azi s-a incheiat dupa Raportul EOD. Oprire container.")
@@ -520,15 +528,16 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
                     time.sleep(wait_sec)
                     continue
 
-                # Cazul 3: Este zi de tranzactionare SUA (bursa se deschide AZI, in mai putin de 10 ore)
-                # NU inchidem sesiunea! Ramanem in Standby cu Telegram Live si intram automat in piata la 16:30 RO!
-                if opens_today_et or (0 < seconds_to_open <= 36000):
+                # Cazul 3: Urmatoarea sesiune SUA se deschide in <= CLOUD_STANDBY_MAX_HOURS (implicit 17h, ex: din seara anterioara 21:30 UTC / 23:30 RO!)
+                # NU inchidem sesiunea! Ramanem in Standby cu Telegram Live si predam stafeta (session-1 -> session-4) pana la 16:30 RO!
+                max_standby_sec = int(getattr(config, "CLOUD_STANDBY_MAX_HOURS", 17)) * 3600
+                if opens_today_et or (0 < seconds_to_open <= max_standby_sec):
                     if not standby_logged:
                         hrs = int(seconds_to_open // 3600)
                         mins = int((seconds_to_open % 3600) // 60)
                         print(
-                            f"☀️ Zi de tranzactionare SUA: Bursa se deschide azi ({clock.next_open.strftime('%H:%M %Z')}, "
-                            f"peste {hrs}h {mins}m). Rulare in mod STANDBY + Telegram Live pana la deschidere..."
+                            f"☀️ Pre-Warm Sesiune SUA: Bursa se deschide la {clock.next_open.strftime('%Y-%m-%d %H:%M %Z')} "
+                            f"(peste {hrs}h {mins}m). Rulare in mod STANDBY + Telegram Live pana la deschidere..."
                         )
                         standby_logged = True
                     time.sleep(60)
@@ -612,9 +621,10 @@ def run_cloud_session(trader: AlpacaTrader, force: bool = False, max_minutes: in
     should_continue = False
     if trader.is_connected and trader.client:
         try:
-            clock = trader.client.get_clock()
+            clock = trader._api_call(trader.client.get_clock)
             sec_to_open = (clock.next_open - clock.timestamp).total_seconds()
-            if clock.is_open or clock.next_open.date() == clock.timestamp.date() or (0 < sec_to_open <= 36000):
+            max_standby_sec = int(getattr(config, "CLOUD_STANDBY_MAX_HOURS", 17)) * 3600
+            if clock.is_open or clock.next_open.date() == clock.timestamp.date() or (0 < sec_to_open <= max_standby_sec):
                 should_continue = True
         except Exception:
             should_continue = True
