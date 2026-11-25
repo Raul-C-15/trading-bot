@@ -1,53 +1,53 @@
 {
   "version": "v2_multisector",
-  "date": "2026-11-24",
-  "updated_at": "2026-11-24 15:30",
+  "date": "2026-11-25",
+  "updated_at": "2026-11-25 15:28",
   "count": 35,
   "hot_sectors": [
-    "HEALTHCARE (RS: +22.1%)",
-    "DEFENSIVE_STAPLES (RS: +16.9%)",
-    "FINANCIALS (RS: +15.8%)"
+    "HEALTHCARE (RS: +26.2%)",
+    "DEFENSIVE_STAPLES (RS: +21.1%)",
+    "HIGH_BETA_GROWTH (RS: +18.6%)"
   ],
   "sector_avg_rs": {
-    "SOFTWARE_CLOUD": 12.36,
-    "FINANCIALS": 15.79,
-    "HEALTHCARE": 22.05,
-    "DEFENSIVE_STAPLES": 16.95,
-    "CONSUMER_RETAIL": 15.21,
-    "HIGH_BETA_GROWTH": 14.21
+    "SOFTWARE_CLOUD": 14.4,
+    "FINANCIALS": 17.84,
+    "HEALTHCARE": 26.19,
+    "DEFENSIVE_STAPLES": 21.05,
+    "CONSUMER_RETAIL": 17.03,
+    "HIGH_BETA_GROWTH": 18.58
   },
   "top_rs_added": [
     "REGN",
     "KO",
     "DIS",
     "SPOT",
+    "RCL",
     "DAL"
   ],
   "top_5_rs": [
-    "COST (+18.1%)",
-    "REGN (+33.2%)",
-    "ABBV (+19.8%)",
-    "MA (+19.2%)",
-    "KO (+15.8%)"
+    "COST (+21.6%)",
+    "REGN (+38.6%)",
+    "KO (+20.5%)",
+    "ABBV (+23.7%)",
+    "MA (+21.8%)"
   ],
   "sectors": {
     "DEFENSIVE_STAPLES": 2,
     "HEALTHCARE": 4,
     "FINANCIALS": 3,
-    "CONSUMER_RETAIL": 2,
+    "CONSUMER_RETAIL": 3,
     "SOFTWARE_CLOUD": 7,
     "HIGH_BETA_GROWTH": 1,
     "SEMICONDUCTORS": 7,
     "CYBERSECURITY": 3,
-    "AI_POWER_INFRA": 5,
-    "INDUSTRIALS_POWER": 1
+    "AI_POWER_INFRA": 5
   },
   "watchlist": [
     "COST",
     "REGN",
+    "KO",
     "ABBV",
     "MA",
-    "KO",
     "V",
     "LLY",
     "DIS",
@@ -55,6 +55,7 @@
     "AAPL",
     "SPOT",
     "SPGI",
+    "RCL",
     "DAL",
     "NVDA",
     "AVGO",
@@ -76,8 +77,7 @@
     "CAT",
     "GE",
     "PWR",
-    "URI",
-    "LMT"
+    "URI"
   ],
   "from_cache": false
 }
