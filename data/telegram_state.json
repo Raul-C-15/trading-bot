@@ -2,7 +2,7 @@
   "pending_signals": {},
   "alerted_today": {
     "_PREMARKET_SENT_": "2026-11-27",
-    "_EOD_SENT_": "2026-11-25",
+    "_EOD_SENT_": "2026-11-27",
     "AAPL": "2026-11-06",
     "MSFT": "2026-11-19",
     "VRTX": "2026-11-06",
@@ -21,6 +21,6 @@
     "ANET": "2026-11-18",
     "ZS": "2026-11-19"
   },
-  "last_update_id": 935411383,
+  "last_update_id": 935411384,
   "auto_trade": true
 }
